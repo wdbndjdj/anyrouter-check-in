@@ -6,8 +6,10 @@ AnyRouter.top 自动签到脚本
 import asyncio
 import hashlib
 import json
+import math
 import os
 import sys
+import time
 from datetime import datetime
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -41,6 +43,17 @@ from utils.proxy import get_playwright_proxy, get_proxy_server
 load_dotenv()
 
 BALANCE_HASH_FILE = 'balance_hash.txt'
+DEFAULT_CHECKIN_RETRY_DELAYS = (15.0, 45.0)
+TRANSIENT_CHECKIN_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
+TRANSIENT_CHECKIN_ERROR_KEYWORDS = (
+	'lock_write',
+	'too many connections',
+	'deadlock',
+	'lock wait timeout',
+	'database is locked',
+	'temporarily unavailable',
+	'try again later',
+)
 
 
 def load_balance_hash():
@@ -277,42 +290,81 @@ async def prepare_cookies(account_name: str, provider_config, user_cookies: dict
 	return {**waf_cookies, **user_cookies}
 
 
-def execute_check_in(client, account_name: str, provider_config, headers: dict):
-	"""执行签到请求"""
-	print(f'[NETWORK] {account_name}: Executing check-in')
+def get_check_in_retry_delays() -> tuple[float, ...]:
+	"""读取签到重试间隔，格式为逗号分隔的秒数。"""
+	raw_delays = os.getenv('CHECKIN_RETRY_DELAYS', '').strip()
+	if not raw_delays:
+		return DEFAULT_CHECKIN_RETRY_DELAYS
 
+	try:
+		delays = tuple(float(value.strip()) for value in raw_delays.split(',') if value.strip())
+		if not delays or any(delay < 0 or not math.isfinite(delay) for delay in delays):
+			raise ValueError
+		return delays
+	except ValueError:
+		print('[WARN] Invalid CHECKIN_RETRY_DELAYS; using default retry schedule')
+		return DEFAULT_CHECKIN_RETRY_DELAYS
+
+
+def is_transient_check_in_error(error_msg: str) -> bool:
+	"""判断是否为适合重试的服务端临时错误。"""
+	normalized = error_msg.lower()
+	return any(keyword in normalized for keyword in TRANSIENT_CHECKIN_ERROR_KEYWORDS)
+
+
+def execute_check_in(client, account_name: str, provider_config, headers: dict):
+	"""执行签到请求；服务端临时故障时自动重试。"""
 	checkin_headers = headers.copy()
 	checkin_headers.update({'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'})
 
 	sign_in_url = f'{provider_config.domain}{provider_config.sign_in_path}'
-	response = client.post(sign_in_url, headers=checkin_headers, timeout=30)
+	retry_delays = get_check_in_retry_delays()
+	total_attempts = len(retry_delays) + 1
+	already_checked_keywords = ['已经签到', '已签到', '重复签到', 'already checked', 'already signed']
 
-	print(f'[RESPONSE] {account_name}: Response status code {response.status_code}')
+	for attempt in range(total_attempts):
+		print(f'[NETWORK] {account_name}: Executing check-in (attempt {attempt + 1}/{total_attempts})')
+		should_retry = False
+		error_msg = 'Unknown error'
 
-	if response.status_code == 200:
 		try:
-			result = response.json()
-			if result.get('ret') == 1 or result.get('code') == 0 or result.get('success'):
-				print(f'[SUCCESS] {account_name}: Check-in successful!')
-				return True
+			response = client.post(sign_in_url, headers=checkin_headers, timeout=30)
+			print(f'[RESPONSE] {account_name}: Response status code {response.status_code}')
+
+			if response.status_code == 200:
+				try:
+					result = response.json()
+					if result.get('ret') == 1 or result.get('code') == 0 or result.get('success'):
+						print(f'[SUCCESS] {account_name}: Check-in successful!')
+						return True
+
+					error_msg = str(result.get('msg', result.get('message', 'Unknown error')))
+					if any(keyword in error_msg.lower() for keyword in already_checked_keywords):
+						print(f'[SUCCESS] {account_name}: Already checked in today')
+						return True
+					should_retry = is_transient_check_in_error(error_msg)
+				except json.JSONDecodeError:
+					if 'success' in response.text.lower():
+						print(f'[SUCCESS] {account_name}: Check-in successful!')
+						return True
+					error_msg = 'Invalid response format'
 			else:
-				error_msg = result.get('msg', result.get('message', 'Unknown error'))
-				already_checked_keywords = ['已经签到', '已签到', '重复签到', 'already checked', 'already signed']
-				if any(keyword in error_msg.lower() for keyword in already_checked_keywords):
-					print(f'[SUCCESS] {account_name}: Already checked in today')
-					return True
-				print(f'[FAILED] {account_name}: Check-in failed - {error_msg}')
-				return False
-		except json.JSONDecodeError:
-			if 'success' in response.text.lower():
-				print(f'[SUCCESS] {account_name}: Check-in successful!')
-				return True
-			else:
-				print(f'[FAILED] {account_name}: Check-in failed - Invalid response format')
-				return False
-	else:
-		print(f'[FAILED] {account_name}: Check-in failed - HTTP {response.status_code}')
+				error_msg = f'HTTP {response.status_code}'
+				should_retry = response.status_code in TRANSIENT_CHECKIN_HTTP_STATUS
+		except httpx.RequestError as exc:
+			error_msg = f'Network error: {str(exc)[:120]}'
+			should_retry = True
+
+		if should_retry and attempt < len(retry_delays):
+			delay = retry_delays[attempt]
+			print(f'[WARN] {account_name}: Temporary check-in failure - {error_msg}; retrying in {delay:g}s')
+			time.sleep(delay)
+			continue
+
+		print(f'[FAILED] {account_name}: Check-in failed - {error_msg}')
 		return False
+
+	return False
 
 
 def format_check_in_notification(detail: dict) -> str:

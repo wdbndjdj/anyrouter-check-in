@@ -15,6 +15,8 @@ jobs:
   checkin:
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
     env:
       PYTHONIOENCODING: utf-8
       PYTHONUNBUFFERED: 1
@@ -72,8 +74,7 @@ jobs:
 
       - name: 执行 AgentRouter 签到
         env:
-          AGENTROUTER_EMAIL: ${{ secrets.AGENTROUTER_EMAIL }}
-          AGENTROUTER_PASSWORD: ${{ secrets.AGENTROUTER_PASSWORD }}
+          ANYROUTER_ACCOUNTS: ${{ secrets.AGENTROUTER_ACCOUNTS_V2 }}
           CHECKIN_HEADLESS: false
           CHECKIN_HUMANIZE: true
           CHECKIN_HUMANIZE_AGENTROUTER: true
@@ -81,24 +82,41 @@ jobs:
           DEBUG_MODE: ${{ env.DEBUG_MODE }}
         shell: bash
         run: |
-          if [[ -z "${AGENTROUTER_EMAIL}" || -z "${AGENTROUTER_PASSWORD}" ]]; then
-            echo "ERROR: AGENTROUTER_EMAIL or AGENTROUTER_PASSWORD is not configured"
+          if [[ -z "${ANYROUTER_ACCOUNTS}" ]]; then
+            echo "ERROR: AGENTROUTER_ACCOUNTS_V2 is not configured"
             exit 1
           fi
 
-          ANYROUTER_ACCOUNTS="$(python - <<'PY'
+          python - <<'PY'
           import json
           import os
+          import re
 
-          print(json.dumps([{
-              "name": "AgentRouter",
-              "provider": "agentrouter",
-              "email": os.environ["AGENTROUTER_EMAIL"],
-              "password": os.environ["AGENTROUTER_PASSWORD"],
-          }]))
+          accounts = json.loads(os.environ["ANYROUTER_ACCOUNTS"])
+          if not isinstance(accounts, list) or len(accounts) != 2:
+              raise SystemExit("ERROR: expected exactly 2 AgentRouter accounts")
+
+          names = []
+          for account in accounts:
+              if not isinstance(account, dict):
+                  raise SystemExit("ERROR: each account must be an object")
+              name = account.get("name")
+              if not isinstance(name, str) or not re.fullmatch(r"agentrouter-\d{2}", name):
+                  raise SystemExit("ERROR: invalid account alias")
+              if account.get("provider") != "agentrouter":
+                  raise SystemExit("ERROR: invalid provider")
+              for key in ("email", "password"):
+                  value = account.get(key)
+                  if not isinstance(value, str) or not value:
+                      raise SystemExit(f"ERROR: missing {key}")
+                  escaped = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::add-mask::{escaped}")
+              names.append(name)
+
+          if len(names) != len(set(names)):
+              raise SystemExit("ERROR: duplicate account alias")
+          print("Validated AgentRouter accounts: count=2")
           PY
-          )"
-          export ANYROUTER_ACCOUNTS
           xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
 
       - name: 上传调试截图

@@ -62,7 +62,7 @@ jobs:
       - name: 配置代理
         env:
           PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
-          PROXY_TEST_URL: https://agentrouter.org/login
+          PROXY_TEST_URL: https://ps.air-outer.com/login
           MIHOMO_VERSION: v1.19.27
           PROXY_REQUIRED: false
         run: bash scripts/setup_mihomo_proxy.sh
@@ -71,6 +71,7 @@ jobs:
         env:
           AGENTROUTER_EMAIL: ${{ secrets.AGENTROUTER_EMAIL }}
           AGENTROUTER_PASSWORD: ${{ secrets.AGENTROUTER_PASSWORD }}
+          PROVIDERS: '{"agentrouter":{"domain":"https://ps.air-outer.com","use_proxy":true}}'
           CHECKIN_HEADLESS: false
           CHECKIN_HUMANIZE: true
           CHECKIN_HUMANIZE_AGENTROUTER: true

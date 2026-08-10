@@ -4,6 +4,7 @@
 #
 # Environment variables:
 #   PROXY_SUBSCRIPTION_URL   Clash/Mihomo subscription URL (required to enable)
+#   PROXY_NODE_URI           Single encrypted VMess URI (takes precedence)
 #   PROXY_TEST_URL           AgentRouter login URL
 #   PROXY_STATUS_URL         AgentRouter status API used to reject hijacked pages
 #   PROXY_REQUIRED           Exit with status 1 when no safe node is found
@@ -13,9 +14,13 @@
 #   PROXY_CANDIDATE_TIMEOUT  Per-request timeout in seconds (default: 12)
 
 set -euo pipefail
+umask 077
 
-if [[ -z "${PROXY_SUBSCRIPTION_URL:-}" ]]; then
-	echo "[INFO] PROXY_SUBSCRIPTION_URL not set, skip proxy setup"
+if [[ -z "${PROXY_NODE_URI:-}" && -z "${PROXY_SUBSCRIPTION_URL:-}" ]]; then
+	echo "[FAILED] No proxy source configured"
+	if [[ "${PROXY_REQUIRED:-false}" == "true" ]]; then
+		exit 1
+	fi
 	exit 0
 fi
 
@@ -38,6 +43,7 @@ cleanup_failed_proxy() {
 	if [[ -f mihomo.pid ]]; then
 		kill "$(cat mihomo.pid)" 2>/dev/null || true
 	fi
+	rm -f agentrouter-node.txt config.yaml select.json provider.json candidates.tsv status-*.json login-*.html
 }
 
 fail_or_skip() {
@@ -60,13 +66,20 @@ gunzip -f "${ARCHIVE}"
 chmod +x "mihomo-linux-amd64-${MIHOMO_VERSION}"
 MIHOMO_BIN="${PROXY_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}"
 
-echo "[INFO] Downloading proxy subscription..."
-if ! curl --retry 3 --retry-delay 3 --retry-all-errors -fsSL \
-	--max-time 60 -o subscription.yaml "${PROXY_SUBSCRIPTION_URL}"; then
-	fail_or_skip "Failed to download proxy subscription"
-fi
-if ! grep -Eq '^proxies:[[:space:]]*$' subscription.yaml; then
-	fail_or_skip "Subscription does not contain a Clash proxies list"
+if [[ -n "${PROXY_NODE_URI:-}" ]]; then
+	echo "[INFO] Preparing encrypted single-node proxy provider..."
+	if [[ "${#PROXY_NODE_URI}" -gt 16384 || "${PROXY_NODE_URI}" == *$'\n'* || "${PROXY_NODE_URI}" == *$'\r'* || "${PROXY_NODE_URI}" != vmess://* ]]; then
+		fail_or_skip "Invalid encrypted VMess node configuration"
+	fi
+	printf '%s\n' "${PROXY_NODE_URI}" > agentrouter-node.txt
+	chmod 600 agentrouter-node.txt
+	unset PROXY_NODE_URI
+else
+	echo "[INFO] Downloading proxy subscription..."
+	if ! curl --retry 3 --retry-delay 3 --retry-all-errors -fsSL \
+		--max-time 60 -o agentrouter-node.txt "${PROXY_SUBSCRIPTION_URL}"; then
+		fail_or_skip "Failed to download proxy subscription"
+	fi
 fi
 
 cat > config.yaml <<EOF
@@ -79,9 +92,9 @@ log-level: warning
 unified-delay: true
 
 proxy-providers:
-  subscription:
+  agentrouter_node:
     type: file
-    path: ./subscription.yaml
+    path: ./agentrouter-node.txt
     health-check:
       enable: true
       interval: 300
@@ -92,7 +105,7 @@ proxy-groups:
   - name: CHECKIN
     type: select
     use:
-      - subscription
+      - agentrouter_node
 
 rules:
   - MATCH,CHECKIN
@@ -111,14 +124,15 @@ PROVIDER_JSON="${PROXY_DIR}/provider.json"
 PROVIDER_READY=false
 for attempt in $(seq 1 30); do
 	if curl -fsS --max-time 3 \
-		"${CONTROLLER_URL}/providers/proxies/subscription" -o "${PROVIDER_JSON}" && \
+		"${CONTROLLER_URL}/providers/proxies/agentrouter_node" -o "${PROVIDER_JSON}" && \
 		python3 - "${PROVIDER_JSON}" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
-    data = json.load(handle)
-raise SystemExit(0 if data.get("proxies") else 1)
+    proxies = json.load(handle).get("proxies", [])
+valid = len(proxies) == 1 and str(proxies[0].get("type")) == "VMess"
+raise SystemExit(0 if valid else 1)
 PY
 	then
 		PROVIDER_READY=true
@@ -136,9 +150,9 @@ fi
 # Ask Mihomo to run its provider health check. A timeout here is harmless; the
 # content-aware checks below remain authoritative.
 curl -fsS --max-time 20 \
-	"${CONTROLLER_URL}/providers/proxies/subscription/healthcheck" -o /dev/null 2>&1 || true
+	"${CONTROLLER_URL}/providers/proxies/agentrouter_node/healthcheck" -o /dev/null 2>&1 || true
 curl -fsS --max-time 5 \
-	"${CONTROLLER_URL}/providers/proxies/subscription" -o "${PROVIDER_JSON}"
+	"${CONTROLLER_URL}/providers/proxies/agentrouter_node" -o "${PROVIDER_JSON}"
 
 CANDIDATES_FILE="${PROXY_DIR}/candidates.tsv"
 python3 - "${PROVIDER_JSON}" "${PROXY_MAX_CANDIDATES}" > "${CANDIDATES_FILE}" <<'PY'

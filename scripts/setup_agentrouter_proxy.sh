@@ -131,7 +131,7 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     proxies = json.load(handle).get("proxies", [])
-valid = len(proxies) == 1 and str(proxies[0].get("type")) == "VMess"
+valid = len(proxies) == 1 and str(proxies[0].get("type")).lower() == "vmess"
 raise SystemExit(0 if valid else 1)
 PY
 	then
@@ -178,7 +178,9 @@ preferred = {
 rows = []
 for index, proxy in enumerate(proxies):
     name = proxy.get("name")
-    proxy_type = str(proxy.get("type", "Unknown"))
+    reported_type = str(proxy.get("type", "Unknown"))
+    canonical_types = {item.lower(): item for item in preferred}
+    proxy_type = canonical_types.get(reported_type.lower(), reported_type)
     if not name or proxy_type not in preferred:
         continue
     history = proxy.get("history") or []

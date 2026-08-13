@@ -1,5 +1,54 @@
 name: AgentRouter 自动签到
 
+on:
+  schedule:
+    - cron: '0 0,8,16 * * *'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 开启调试截图与详细日志
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: 1
+      DEBUG_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug == 'true' && 'true' || 'false' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: latest
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: 缓存 UV 依赖
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: 安装依赖
+        run: uv sync --frozen
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont \
+            fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf
 
       - name: 缓存 CloakBrowser
         uses: actions/cache@v5
@@ -9,10 +58,8 @@ name: AgentRouter 自动签到
           restore-keys: |
             ${{ runner.os }}-cloakbrowser-
 
-
       - name: 安装 CloakBrowser
         run: uv run python -m cloakbrowser install
-
 
       - name: 配置代理
         env:
@@ -25,10 +72,10 @@ name: AgentRouter 自动签到
           PROXY_CANDIDATE_TIMEOUT: 12
         run: bash scripts/setup_agentrouter_proxy.sh
 
-
       - name: 执行 AgentRouter 签到
         env:
-          ANYROUTER_ACCOUNTS: ${{ secrets.AGENTROUTER_ACCOUNTS_V2 }}
+          ANYROUTER_ACCOUNTS_BASE: ${{ secrets.AGENTROUTER_ACCOUNTS_V2 }}
+          ANYROUTER_ACCOUNTS_EXTRA: ${{ secrets.AGENTROUTER_ACCOUNTS_EXTRA }}
           CHECKIN_HEADLESS: false
           CHECKIN_HUMANIZE: true
           CHECKIN_HUMANIZE_AGENTROUTER: true
@@ -36,23 +83,32 @@ name: AgentRouter 自动签到
           DEBUG_MODE: ${{ env.DEBUG_MODE }}
         shell: bash
         run: |
-          if [[ -z "${ANYROUTER_ACCOUNTS}" ]]; then
+          if [[ -z "${ANYROUTER_ACCOUNTS_BASE}" ]]; then
             echo "ERROR: AGENTROUTER_ACCOUNTS_V2 is not configured"
             exit 1
           fi
+          if [[ -z "${ANYROUTER_ACCOUNTS_EXTRA}" ]]; then
+            echo "ERROR: AGENTROUTER_ACCOUNTS_EXTRA is not configured"
+            exit 1
+          fi
 
+          accounts_file="${RUNNER_TEMP}/agentrouter-accounts.json"
+          trap 'rm -f "${accounts_file}"' EXIT
+          export AGENTROUTER_ACCOUNTS_FILE="${accounts_file}"
 
           python - <<'PY'
           import json
           import os
           import re
 
+          base_accounts = json.loads(os.environ["ANYROUTER_ACCOUNTS_BASE"])
+          extra_accounts = json.loads(os.environ["ANYROUTER_ACCOUNTS_EXTRA"])
+          if not isinstance(base_accounts, list) or len(base_accounts) != 8:
+              raise SystemExit("ERROR: expected exactly 8 base AgentRouter accounts")
+          if not isinstance(extra_accounts, list) or len(extra_accounts) != 3:
+              raise SystemExit("ERROR: expected exactly 3 extra AgentRouter accounts")
 
-          accounts = json.loads(os.environ["ANYROUTER_ACCOUNTS"])
-          if not isinstance(accounts, list) or len(accounts) != 11:
-              raise SystemExit("ERROR: expected exactly 11 AgentRouter accounts")
-
-
+          accounts = base_accounts + extra_accounts
           names = []
           for account in accounts:
               if not isinstance(account, dict):
@@ -70,14 +126,19 @@ name: AgentRouter 自动签到
                   print(f"::add-mask::{escaped}")
               names.append(name)
 
-
           expected_names = [f"agentrouter-{index:02d}" for index in range(1, 12)]
           if names != expected_names:
               raise SystemExit("ERROR: account aliases or order are invalid")
+
+          accounts_file = os.environ["AGENTROUTER_ACCOUNTS_FILE"]
+          with open(accounts_file, "w", encoding="utf-8") as file:
+              json.dump(accounts, file, ensure_ascii=False, separators=(",", ":"))
+          os.chmod(accounts_file, 0o600)
           print("Validated AgentRouter accounts: count=11")
           PY
-          xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
 
+          export ANYROUTER_ACCOUNTS="$(<"${accounts_file}")"
+          xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
 
       - name: 上传调试截图
         if: always() && env.DEBUG_MODE == 'true'
@@ -89,8 +150,6 @@ name: AgentRouter 自动签到
           include-hidden-files: true
           retention-days: 7
 
-
       - name: 停止代理
         if: always()
         run: bash scripts/stop_mihomo_proxy.sh
-

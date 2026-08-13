@@ -1,54 +1,5 @@
 name: AgentRouter 自动签到
 
-on:
-  schedule:
-    - cron: '0 0,8,16 * * *'
-  workflow_dispatch:
-    inputs:
-      debug:
-        description: 开启调试截图与详细日志
-        required: false
-        default: false
-        type: boolean
-
-jobs:
-  checkin:
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-    env:
-      PYTHONIOENCODING: utf-8
-      PYTHONUNBUFFERED: 1
-      DEBUG_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug == 'true' && 'true' || 'false' }}
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
-        with:
-          version: latest
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      - name: 缓存 UV 依赖
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: 安装依赖
-        run: uv sync --frozen
-
-      - name: 安装系统依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont \
-            fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf
 
       - name: 缓存 CloakBrowser
         uses: actions/cache@v5
@@ -58,8 +9,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cloakbrowser-
 
+
       - name: 安装 CloakBrowser
         run: uv run python -m cloakbrowser install
+
 
       - name: 配置代理
         env:
@@ -71,6 +24,7 @@ jobs:
           PROXY_MAX_CANDIDATES: 160
           PROXY_CANDIDATE_TIMEOUT: 12
         run: bash scripts/setup_agentrouter_proxy.sh
+
 
       - name: 执行 AgentRouter 签到
         env:
@@ -87,14 +41,17 @@ jobs:
             exit 1
           fi
 
+
           python - <<'PY'
           import json
           import os
           import re
 
+
           accounts = json.loads(os.environ["ANYROUTER_ACCOUNTS"])
-          if not isinstance(accounts, list) or len(accounts) != 8:
-              raise SystemExit("ERROR: expected exactly 8 AgentRouter accounts")
+          if not isinstance(accounts, list) or len(accounts) != 11:
+              raise SystemExit("ERROR: expected exactly 11 AgentRouter accounts")
+
 
           names = []
           for account in accounts:
@@ -113,12 +70,14 @@ jobs:
                   print(f"::add-mask::{escaped}")
               names.append(name)
 
-          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 9)]
+
+          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 12)]
           if names != expected_names:
               raise SystemExit("ERROR: account aliases or order are invalid")
-          print("Validated AgentRouter accounts: count=8")
+          print("Validated AgentRouter accounts: count=11")
           PY
           xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
+
 
       - name: 上传调试截图
         if: always() && env.DEBUG_MODE == 'true'
@@ -130,6 +89,8 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+
       - name: 停止代理
         if: always()
         run: bash scripts/stop_mihomo_proxy.sh
+

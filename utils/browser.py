@@ -53,6 +53,7 @@ FORM_ACTION_TIMEOUT_MS = 15_000
 EMAIL_TAB_TIMEOUT_MS = 8_000
 WAF_READY_TIMEOUT_MS = 30_000
 SESSION_WAIT_TIMEOUT_MS = 45_000
+TURNSTILE_WAIT_TIMEOUT_MS = 60_000
 
 _VISIBLE_CHECK_JS = """
 	const isVisible = (el) => {
@@ -136,6 +137,33 @@ _OPEN_EMAIL_FORM_JS = """() => {
 	}
 
 	return !!findUsername();
+}"""
+
+_ACCEPT_LOGIN_TERMS_JS = """() => {
+	const textMatches = (el) => /我已阅读|我已同意|用户协议|隐私政策/i.test(el?.innerText || el?.textContent || '');
+	const candidates = [
+		...document.querySelectorAll('label'),
+		...document.querySelectorAll('.semi-checkbox'),
+	].filter(textMatches);
+	let accepted = 0;
+	for (const candidate of candidates) {
+		const checkbox = candidate.matches('input[type="checkbox"]')
+			? candidate
+			: candidate.querySelector('input[type="checkbox"]');
+		if (!checkbox || checkbox.checked) continue;
+		candidate.click();
+		if (checkbox.checked) accepted += 1;
+	}
+	return accepted;
+}"""
+
+_TURNSTILE_PRESENT_JS = """() => !!document.querySelector(
+	'.cf-turnstile, iframe[src*="challenges.cloudflare.com"], [name="cf-turnstile-response"]'
+)"""
+
+_TURNSTILE_READY_JS = """() => {
+	const response = document.querySelector('[name="cf-turnstile-response"]');
+	return !!response && typeof response.value === 'string' && response.value.trim().length > 0;
 }"""
 
 
@@ -737,6 +765,34 @@ async def fill_email_credentials(page: Page, email: str, password: str, timeout_
 	await _set_input_value(password_input, password, action_timeout)
 
 
+async def prepare_login_challenges(page: Page, timeout_ms: int) -> None:
+	"""接受登录页必选条款，并等待 Cloudflare Turnstile 令牌就绪。"""
+	try:
+		accepted = await page.evaluate(_ACCEPT_LOGIN_TERMS_JS)
+		if accepted:
+			print(f'[INFO] Accepted {accepted} required login agreement checkbox(es)')
+	except Exception as exc:  # nosec B110
+		debug_print(f'[INFO] Login agreement detection skipped: {exc}')
+
+	try:
+		turnstile_present = bool(await page.evaluate(_TURNSTILE_PRESENT_JS))
+	except Exception as exc:  # nosec B110
+		debug_print(f'[INFO] Turnstile detection skipped: {exc}')
+		return
+
+	if not turnstile_present:
+		return
+
+	print('[INFO] Waiting for Cloudflare Turnstile login token')
+	turnstile_timeout = min(timeout_ms, TURNSTILE_WAIT_TIMEOUT_MS)
+	try:
+		await page.wait_for_function(_TURNSTILE_READY_JS, timeout=turnstile_timeout)
+		print('[INFO] Cloudflare Turnstile login token is ready')
+	except Exception as exc:
+		debug_print(f'[WARN] Turnstile token did not become ready: {exc}')
+		raise TimeoutError('Cloudflare Turnstile login token was not generated') from exc
+
+
 async def submit_login_form(page: Page, timeout_ms: int) -> None:
 	action_timeout = min(timeout_ms, FORM_ACTION_TIMEOUT_MS)
 	submit = await _first_visible_locator(page, SUBMIT_SELECTORS)
@@ -776,4 +832,5 @@ async def login_with_email_form(
 		account_name=account_name,
 	)
 	await fill_email_credentials(page, email, password, timeout_ms)
+	await prepare_login_challenges(page, timeout_ms)
 	await submit_login_form(page, timeout_ms)

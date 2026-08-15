@@ -61,11 +61,19 @@ jobs:
       - name: 安装 CloakBrowser
         run: uv run python -m cloakbrowser install
 
+      - name: 配置星见雅代理
+        env:
+          PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+          PROXY_TEST_URL: https://new.xinjianya.top/login
+          MIHOMO_VERSION: v1.19.27
+          PROXY_REQUIRED: true
+        run: bash scripts/setup_mihomo_proxy.sh
+
       - name: 执行星见雅签到
         env:
           ANYROUTER_ACCOUNTS: ${{ secrets.XINGJIANYA_ACCOUNT }}
           PROVIDERS: >-
-            {"xingjianya":{"domain":"https://new.xinjianya.top","login_path":"/login","sign_in_path":"/api/user/checkin","user_info_path":"/api/user/self","api_user_key":"new-api-user","bypass_method":null,"use_proxy":false,"persist_profile":false}}
+            {"xingjianya":{"domain":"https://new.xinjianya.top","login_path":"/login","sign_in_path":"/api/user/checkin","user_info_path":"/api/user/self","api_user_key":"new-api-user","bypass_method":null,"use_proxy":true,"persist_profile":false}}
           CHECKIN_HEADLESS: false
           CHECKIN_HUMANIZE: true
           CHECKIN_WAIT_TIMEOUT_MS: 120000
@@ -86,3 +94,7 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 7
+
+      - name: 停止代理
+        if: always()
+        run: bash scripts/stop_mihomo_proxy.sh

@@ -1,0 +1,88 @@
+name: 星见雅 API 自动签到
+
+on:
+  schedule:
+    - cron: '20 0 * * *'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 开启调试截图与详细日志
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: 1
+      DEBUG_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug == 'true' && 'true' || 'false' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: latest
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: 缓存 UV 依赖
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: 安装依赖
+        run: uv sync --frozen
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont \
+            fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf
+
+      - name: 缓存 CloakBrowser
+        uses: actions/cache@v5
+        with:
+          path: ~/.cloakbrowser
+          key: ${{ runner.os }}-cloakbrowser-v1
+          restore-keys: |
+            ${{ runner.os }}-cloakbrowser-
+
+      - name: 安装 CloakBrowser
+        run: uv run python -m cloakbrowser install
+
+      - name: 执行星见雅签到
+        env:
+          ANYROUTER_ACCOUNTS: ${{ secrets.XINGJIANYA_ACCOUNT }}
+          PROVIDERS: >-
+            {"xingjianya":{"domain":"https://new.xinjianya.top","login_path":"/login","sign_in_path":"/api/user/checkin","user_info_path":"/api/user/self","api_user_key":"new-api-user","bypass_method":null,"use_proxy":false,"persist_profile":false}}
+          CHECKIN_HEADLESS: false
+          CHECKIN_HUMANIZE: true
+          CHECKIN_WAIT_TIMEOUT_MS: 120000
+          DEBUG_MODE: ${{ env.DEBUG_MODE }}
+        run: |
+          if [[ -z "${ANYROUTER_ACCOUNTS}" ]]; then
+            echo "ERROR: XINGJIANYA_ACCOUNT is not configured"
+            exit 1
+          fi
+          xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
+
+      - name: 上传调试截图
+        if: always() && env.DEBUG_MODE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: xingjianya-screenshots-${{ github.run_id }}
+          path: checkin_screenshots/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7

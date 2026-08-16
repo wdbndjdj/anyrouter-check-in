@@ -5,7 +5,13 @@ import httpx
 import pytest
 
 import checkin
-from checkin import execute_browser_check_in, execute_check_in, get_check_in_retry_delays
+from checkin import (
+	execute_browser_check_in,
+	execute_check_in,
+	get_browser_account_cooldown_seconds,
+	get_browser_check_in_retry_delays,
+	get_check_in_retry_delays,
+)
 
 
 def response(status_code: int, payload: dict | None = None, text: str | None = None) -> MagicMock:
@@ -80,6 +86,24 @@ def test_non_finite_retry_delays_use_defaults(monkeypatch):
 	assert get_check_in_retry_delays() == checkin.DEFAULT_CHECKIN_RETRY_DELAYS
 
 
+def test_browser_retry_delays_use_longer_defaults(monkeypatch):
+	monkeypatch.delenv('BROWSER_CHECKIN_RETRY_DELAYS', raising=False)
+
+	assert get_browser_check_in_retry_delays() == (90.0, 180.0)
+
+
+def test_browser_retry_delays_can_be_overridden(monkeypatch):
+	monkeypatch.setenv('BROWSER_CHECKIN_RETRY_DELAYS', '0,1.5')
+
+	assert get_browser_check_in_retry_delays() == (0.0, 1.5)
+
+
+def test_browser_account_cooldown_can_be_overridden(monkeypatch):
+	monkeypatch.setenv('BROWSER_ACCOUNT_COOLDOWN_SECONDS', '12.5')
+
+	assert get_browser_account_cooldown_seconds() == 12.5
+
+
 @pytest.mark.asyncio
 async def test_browser_check_in_uses_logged_in_page_context():
 	page = AsyncMock()
@@ -101,6 +125,31 @@ async def test_browser_check_in_uses_logged_in_page_context():
 	assert after['quota'] == 2.0
 	assert page.evaluate.await_args.args[1]['apiUser'] == '42'
 	assert page.evaluate.await_args.args[1]['loginUser'] is None
-	assert page.evaluate.await_args.args[1]['retryDelaysMs'] == [15000, 45000]
+	assert page.evaluate.await_args.args[1]['retryDelaysMs'] == [90000, 180000]
 	assert "'Cache-Control': 'no-store'" in page.evaluate.await_args.args[0]
 	assert 'retry ? [0, ...retryDelaysMs] : [0]' in page.evaluate.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_main_cools_down_between_browser_check_in_accounts(mocker, monkeypatch):
+	provider_config = SimpleNamespace(browser_check_in=True)
+	app_config = SimpleNamespace(
+		providers={'xingjianya': provider_config},
+		get_provider=lambda name: provider_config,
+	)
+	accounts = [
+		SimpleNamespace(provider='xingjianya', get_display_name=lambda index: 'account-1'),
+		SimpleNamespace(provider='xingjianya', get_display_name=lambda index: 'account-2'),
+	]
+	monkeypatch.delenv('BROWSER_ACCOUNT_COOLDOWN_SECONDS', raising=False)
+	mocker.patch('checkin.is_debug_enabled', return_value=False)
+	mocker.patch('checkin.AppConfig.load_from_env', return_value=app_config)
+	mocker.patch('checkin.load_accounts_config', return_value=accounts)
+	mocker.patch('checkin.load_balance_hash', return_value=None)
+	mocker.patch('checkin.check_in_account', new=AsyncMock(return_value=(True, None, None)))
+	sleep = mocker.patch('checkin.asyncio.sleep', new=AsyncMock())
+
+	with pytest.raises(SystemExit, match='0'):
+		await checkin.main()
+
+	sleep.assert_awaited_once_with(60.0)

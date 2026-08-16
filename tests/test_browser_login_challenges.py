@@ -17,6 +17,11 @@ def test_login_terms_acceptor_supports_english_and_aria_checkboxes():
 	assert 'User Agreement' in _ACCEPT_LOGIN_TERMS_JS
 	assert 'Privacy Policy' in _ACCEPT_LOGIN_TERMS_JS
 	assert '[role="checkbox"]' in _ACCEPT_LOGIN_TERMS_JS
+	assert "checkbox.getAttribute('aria-labelledby')" in _ACCEPT_LOGIN_TERMS_JS
+	assert 'checkbox.labels' in _ACCEPT_LOGIN_TERMS_JS
+	assert "checkbox.closest('label, .semi-checkbox')" in _ACCEPT_LOGIN_TERMS_JS
+	assert "checkbox.matches('[role=\"checkbox\"]') ? checkbox" in _ACCEPT_LOGIN_TERMS_JS
+	assert ".length === 1" in _ACCEPT_LOGIN_TERMS_JS
 
 
 class ResponseContext:
@@ -154,8 +159,9 @@ async def test_submit_login_form_accepts_successful_login(mocker):
 	wait_login = mocker.patch('utils.browser.wait_for_logged_in', new=AsyncMock(return_value=True))
 	mocker.patch('utils.browser._first_visible_locator', new=AsyncMock(return_value=submit))
 
-	await submit_login_form(page, 30_000)
+	result = await submit_login_form(page, 30_000)
 
+	assert result == {'id': 42}
 	assert wait_load.await_count == 2
 	wait_login.assert_awaited_once()
 

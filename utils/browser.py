@@ -141,25 +141,33 @@ _OPEN_EMAIL_FORM_JS = """() => {
 }"""
 
 _ACCEPT_LOGIN_TERMS_JS = """() => {
-	const textMatches = (el) => /我已阅读|我已同意|用户协议|隐私政策|I have read|I agree|User Agreement|Privacy Policy|Terms(?: of Service)?/i.test(
-		el?.innerText || el?.textContent || ''
-	);
-	const candidates = [
-		...document.querySelectorAll('label'),
-		...document.querySelectorAll('.semi-checkbox'),
-		...document.querySelectorAll('[role="checkbox"]'),
-	].filter(textMatches);
-	const seen = new Set();
+	const termsPattern = /我已阅读|我已同意|用户协议|隐私政策|I have read|I agree|User Agreement|Privacy Policy|Terms(?: of Service)?/i;
+	const controls = document.querySelectorAll('input[type="checkbox"], [role="checkbox"]');
 	let accepted = 0;
-	for (const candidate of candidates) {
-		const checkbox = candidate.matches('input[type="checkbox"], [role="checkbox"]')
-			? candidate
-			: candidate.querySelector('input[type="checkbox"], [role="checkbox"]');
-		if (!checkbox || seen.has(checkbox)) continue;
-		seen.add(checkbox);
+	for (const checkbox of controls) {
+		const labelledBy = (checkbox.getAttribute('aria-labelledby') || '')
+			.split(/\\s+/)
+			.filter(Boolean)
+			.map((id) => document.getElementById(id)?.textContent || '')
+			.join(' ');
+		const labels = checkbox.labels ? [...checkbox.labels] : [];
+		const wrapper = checkbox.closest('label, .semi-checkbox') || checkbox.parentElement;
+		const parent = wrapper?.parentElement;
+		const parentText = parent?.querySelectorAll('input[type="checkbox"], [role="checkbox"]').length === 1
+			? parent.innerText || parent.textContent || ''
+			: '';
+		const agreementText = [
+			checkbox.getAttribute('aria-label') || '',
+			labelledBy,
+			...labels.map((label) => label.innerText || label.textContent || ''),
+			wrapper?.innerText || wrapper?.textContent || '',
+			parentText,
+		].join(' ');
+		if (!termsPattern.test(agreementText)) continue;
 		const isChecked = () => checkbox.checked || checkbox.getAttribute('aria-checked') === 'true';
 		if (isChecked()) continue;
-		candidate.click();
+		const clickTarget = checkbox.matches('[role="checkbox"]') ? checkbox : labels[0] || wrapper || checkbox;
+		clickTarget.click();
 		if (isChecked()) accepted += 1;
 	}
 	return accepted;

@@ -120,8 +120,9 @@ def _browser_user_info(result: dict | None) -> dict | None:
 
 async def execute_browser_check_in(page, account_name: str, provider_config, api_user: str | None):
 	"""在已登录页面内完成 WAF 保护的用户信息与签到请求。"""
+	retry_delays_ms = [int(delay * 1000) for delay in get_check_in_retry_delays()]
 	result = await page.evaluate(
-		"""async ({ userInfoPath, signInPath, apiUserKey, apiUser }) => {
+		"""async ({ userInfoPath, signInPath, apiUserKey, apiUser, retryDelaysMs }) => {
 			const baseHeaders = {
 				Accept: 'application/json, text/plain, */*',
 				'Cache-Control': 'no-store',
@@ -129,16 +130,23 @@ async def execute_browser_check_in(page, account_name: str, provider_config, api
 			};
 			if (apiUser) baseHeaders[apiUserKey] = apiUser;
 			const request = async (path, options = {}) => {
-				const response = await fetch(path, {
-					credentials: 'include',
-					...options,
-					headers: { ...baseHeaders, ...(options.headers || {}) },
-				});
-				const text = await response.text();
-				let body;
-				try { body = JSON.parse(text); }
-				catch { body = { message: text.slice(0, 300) }; }
-				return { status: response.status, body };
+				const delays = [0, ...retryDelaysMs];
+				for (let attempt = 0; attempt < delays.length; attempt += 1) {
+					if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+					const response = await fetch(path, {
+						credentials: 'include',
+						...options,
+						headers: { ...baseHeaders, ...(options.headers || {}) },
+					});
+					const text = await response.text();
+					let body;
+					try { body = JSON.parse(text); }
+					catch { body = { message: text.slice(0, 300) }; }
+					const retryable = [408, 425, 429, 500, 502, 503, 504].includes(response.status);
+					if (!retryable || attempt === delays.length - 1) {
+						return { status: response.status, body, attempts: attempt + 1 };
+					}
+				}
 			};
 			const before = await request(userInfoPath);
 			const checkIn = await request(signInPath, {
@@ -153,6 +161,7 @@ async def execute_browser_check_in(page, account_name: str, provider_config, api
 			'signInPath': provider_config.sign_in_path,
 			'apiUserKey': provider_config.api_user_key,
 			'apiUser': api_user,
+			'retryDelaysMs': retry_delays_ms,
 		},
 	)
 
@@ -160,6 +169,7 @@ async def execute_browser_check_in(page, account_name: str, provider_config, api
 	status = check_in.get('status')
 	payload = check_in.get('body') if isinstance(check_in.get('body'), dict) else {}
 	message = str(payload.get('msg', payload.get('message', '')))
+	attempts = int(check_in.get('attempts') or 1)
 	already_checked = any(
 		keyword in message.lower()
 		for keyword in ('已经签到', '已签到', '重复签到', 'already checked', 'already signed')
@@ -167,7 +177,7 @@ async def execute_browser_check_in(page, account_name: str, provider_config, api
 	success = status == 200 and (
 		payload.get('ret') == 1 or payload.get('code') == 0 or payload.get('success') or already_checked
 	)
-	print(f'[RESPONSE] {account_name}: Browser check-in status code {status}')
+	print(f'[RESPONSE] {account_name}: Browser check-in status code {status} after {attempts} attempt(s)')
 	if success:
 		print(f'[SUCCESS] {account_name}: Browser check-in successful!')
 	else:
@@ -809,3 +819,4 @@ def run_main():
 
 if __name__ == '__main__':
 	run_main()
+

@@ -118,19 +118,25 @@ def _browser_user_info(result: dict | None) -> dict | None:
 	return {'success': False, 'error': f'Failed to get user info: HTTP {status or 0}'}
 
 
-async def execute_browser_check_in(page, account_name: str, provider_config, api_user: str | None):
+async def execute_browser_check_in(
+	page,
+	account_name: str,
+	provider_config,
+	api_user: str | None,
+	login_user: dict | None = None,
+):
 	"""在已登录页面内完成 WAF 保护的用户信息与签到请求。"""
 	retry_delays_ms = [int(delay * 1000) for delay in get_check_in_retry_delays()]
 	result = await page.evaluate(
-		"""async ({ userInfoPath, signInPath, apiUserKey, apiUser, retryDelaysMs }) => {
+		"""async ({ userInfoPath, signInPath, apiUserKey, apiUser, loginUser, retryDelaysMs }) => {
 			const baseHeaders = {
 				Accept: 'application/json, text/plain, */*',
 				'Cache-Control': 'no-store',
 				'X-Requested-With': 'XMLHttpRequest',
 			};
 			if (apiUser) baseHeaders[apiUserKey] = apiUser;
-			const request = async (path, options = {}) => {
-				const delays = [0, ...retryDelaysMs];
+			const request = async (path, options = {}, retry = false) => {
+				const delays = retry ? [0, ...retryDelaysMs] : [0];
 				for (let attempt = 0; attempt < delays.length; attempt += 1) {
 					if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
 					const response = await fetch(path, {
@@ -148,11 +154,11 @@ async def execute_browser_check_in(page, account_name: str, provider_config, api
 					}
 				}
 			};
-			const before = await request(userInfoPath);
+			const before = { status: 200, body: { success: true, data: loginUser || {} } };
 			const checkIn = await request(signInPath, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-			});
+			}, true);
 			const after = await request(userInfoPath);
 			return { before, checkIn, after };
 		}""",
@@ -161,6 +167,7 @@ async def execute_browser_check_in(page, account_name: str, provider_config, api
 			'signInPath': provider_config.sign_in_path,
 			'apiUserKey': provider_config.api_user_key,
 			'apiUser': api_user,
+			'loginUser': login_user,
 			'retryDelaysMs': retry_delays_ms,
 		},
 	)
@@ -330,7 +337,7 @@ async def login_with_credentials(
 		user_info_after = None
 		if provider_config.browser_check_in and provider_config.sign_in_path:
 			browser_check_in_success, user_info_before, user_info_after = await execute_browser_check_in(
-				page, account_name, provider_config, api_user
+				page, account_name, provider_config, api_user, user_profile
 			)
 
 		success_msg = f'[SUCCESS] {account_name}: Login successful, got {len(all_cookies)} cookies'
@@ -819,4 +826,3 @@ def run_main():
 
 if __name__ == '__main__':
 	run_main()
-

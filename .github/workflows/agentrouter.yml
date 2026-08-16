@@ -105,8 +105,8 @@ jobs:
           extra_accounts = json.loads(os.environ["ANYROUTER_ACCOUNTS_EXTRA"])
           if not isinstance(base_accounts, list) or len(base_accounts) != 8:
               raise SystemExit("ERROR: expected exactly 8 base AgentRouter accounts")
-          if not isinstance(extra_accounts, list) or len(extra_accounts) != 3:
-              raise SystemExit("ERROR: expected exactly 3 extra AgentRouter accounts")
+          if not isinstance(extra_accounts, list) or len(extra_accounts) != 4:
+              raise SystemExit("ERROR: expected exactly 4 extra AgentRouter accounts")
 
           accounts = base_accounts + extra_accounts
           names = []
@@ -126,7 +126,7 @@ jobs:
                   print(f"::add-mask::{escaped}")
               names.append(name)
 
-          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 12)]
+          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 13)]
           if names != expected_names:
               raise SystemExit("ERROR: account aliases or order are invalid")
 
@@ -134,7 +134,7 @@ jobs:
           with open(accounts_file, "w", encoding="utf-8") as file:
               json.dump(accounts, file, ensure_ascii=False, separators=(",", ":"))
           os.chmod(accounts_file, 0o600)
-          print("Validated AgentRouter accounts: count=11")
+          print("Validated AgentRouter accounts: count=12")
           PY
 
           export ANYROUTER_ACCOUNTS="$(<"${accounts_file}")"
@@ -153,3 +153,4 @@ jobs:
       - name: 停止代理
         if: always()
         run: bash scripts/stop_mihomo_proxy.sh
+

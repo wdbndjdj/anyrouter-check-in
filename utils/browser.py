@@ -839,6 +839,14 @@ async def submit_login_form(page: Page, timeout_ms: int) -> None:
 		lambda: submit.click(force=True, timeout=action_timeout),
 		lambda: submit.evaluate(
 			"""(button) => {
+				button.disabled = false;
+				button.removeAttribute('disabled');
+				button.setAttribute('aria-disabled', 'false');
+				button.click();
+			}"""
+		),
+		lambda: submit.evaluate(
+			"""(button) => {
 				const form = button.form;
 				if (!form) throw new Error('Login submit button has no form');
 				if (typeof form.requestSubmit === 'function') form.requestSubmit(button);

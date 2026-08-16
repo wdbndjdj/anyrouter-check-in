@@ -292,10 +292,14 @@ async def login_with_credentials(
 			print(f'[INFO] {account_name}: Browser profile already logged in')
 
 		console_url = f'{provider_config.domain}/console'
-		user_profile = await verify_browser_login(page, console_url, timeout_ms)
-		if not user_profile and isinstance(login_profile, dict) and login_profile.get('id'):
-			print(f'[WARN] {account_name}: Using verified login API user after /api/user/self timeout')
+		if provider_config.browser_check_in and isinstance(login_profile, dict) and login_profile.get('id'):
+			print(f'[INFO] {account_name}: Using user returned by successful login API')
 			user_profile = login_profile
+		else:
+			user_profile = await verify_browser_login(page, console_url, timeout_ms)
+			if not user_profile and isinstance(login_profile, dict) and login_profile.get('id'):
+				print(f'[WARN] {account_name}: Using verified login API user after /api/user/self timeout')
+				user_profile = login_profile
 		if not user_profile:
 			cookies = await context.cookies()
 			cookie_names = [c.get('name') for c in cookies if c.get('name')]

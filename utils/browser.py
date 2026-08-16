@@ -712,11 +712,11 @@ async def _set_input_value(locator: Locator, value: str, timeout_ms: int) -> Non
 
 	try:
 		await locator.fill(value, timeout=timeout_ms)
-		if await locator.input_value(timeout=2000) == value:
-			return
 	except Exception:  # nosec B110
 		pass
 
+	# Semi UI's controlled form can miss Playwright's synthetic fill event.
+	# Re-apply the native value setter and dispatch the events its state hook reads.
 	await locator.evaluate(
 		"""(el, v) => {
 			const setter = Object.getOwnPropertyDescriptor(
@@ -725,9 +725,12 @@ async def _set_input_value(locator: Locator, value: str, timeout_ms: int) -> Non
 			setter?.call(el, v);
 			el.dispatchEvent(new Event('input', { bubbles: true }));
 			el.dispatchEvent(new Event('change', { bubbles: true }));
+			el.dispatchEvent(new Event('blur', { bubbles: true }));
 		}""",
 		value,
 	)
+	if await locator.input_value(timeout=2000) != value:
+		raise RuntimeError('Login input value was not applied')
 
 
 async def fill_email_credentials(page: Page, email: str, password: str, timeout_ms: int) -> None:

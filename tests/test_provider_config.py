@@ -35,6 +35,18 @@ def test_custom_provider_profile_persistence_defaults_to_false(monkeypatch):
 	config = AppConfig.load_from_env()
 
 	assert config.providers['custom'].persist_profile is False
+	assert config.providers['custom'].browser_check_in is False
+
+
+def test_custom_provider_can_enable_browser_check_in(monkeypatch):
+	monkeypatch.setenv(
+		'PROVIDERS',
+		json.dumps({'custom': {'domain': 'https://custom.example.com', 'browser_check_in': True}}),
+	)
+
+	config = AppConfig.load_from_env()
+
+	assert config.providers['custom'].browser_check_in is True
 
 
 def test_provider_from_dict_inherits_profile_persistence_from_defaults():

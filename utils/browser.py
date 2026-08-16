@@ -141,19 +141,26 @@ _OPEN_EMAIL_FORM_JS = """() => {
 }"""
 
 _ACCEPT_LOGIN_TERMS_JS = """() => {
-	const textMatches = (el) => /我已阅读|我已同意|用户协议|隐私政策/i.test(el?.innerText || el?.textContent || '');
+	const textMatches = (el) => /我已阅读|我已同意|用户协议|隐私政策|I have read|I agree|User Agreement|Privacy Policy|Terms(?: of Service)?/i.test(
+		el?.innerText || el?.textContent || ''
+	);
 	const candidates = [
 		...document.querySelectorAll('label'),
 		...document.querySelectorAll('.semi-checkbox'),
+		...document.querySelectorAll('[role="checkbox"]'),
 	].filter(textMatches);
+	const seen = new Set();
 	let accepted = 0;
 	for (const candidate of candidates) {
-		const checkbox = candidate.matches('input[type="checkbox"]')
+		const checkbox = candidate.matches('input[type="checkbox"], [role="checkbox"]')
 			? candidate
-			: candidate.querySelector('input[type="checkbox"]');
-		if (!checkbox || checkbox.checked) continue;
+			: candidate.querySelector('input[type="checkbox"], [role="checkbox"]');
+		if (!checkbox || seen.has(checkbox)) continue;
+		seen.add(checkbox);
+		const isChecked = () => checkbox.checked || checkbox.getAttribute('aria-checked') === 'true';
+		if (isChecked()) continue;
 		candidate.click();
-		if (checkbox.checked) accepted += 1;
+		if (isChecked()) accepted += 1;
 	}
 	return accepted;
 }"""

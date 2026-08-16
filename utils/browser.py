@@ -187,6 +187,9 @@ _TURNSTILE_READY_JS = """() => {
 class BrowserLoginResult:
 	cookies: dict[str, str]
 	api_user: str | None = None
+	check_in_success: bool | None = None
+	user_info_before: dict | None = None
+	user_info_after: dict | None = None
 
 
 @dataclass(frozen=True)

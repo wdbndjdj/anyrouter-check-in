@@ -3,12 +3,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from utils.browser import (
+	_ACCEPT_LOGIN_TERMS_JS,
 	TURNSTILE_WAIT_TIMEOUT_MS,
 	_first_visible_locator,
 	_set_input_value,
 	prepare_login_challenges,
 	submit_login_form,
 )
+
+
+def test_login_terms_acceptor_supports_english_and_aria_checkboxes():
+	assert 'I have read' in _ACCEPT_LOGIN_TERMS_JS
+	assert 'User Agreement' in _ACCEPT_LOGIN_TERMS_JS
+	assert 'Privacy Policy' in _ACCEPT_LOGIN_TERMS_JS
+	assert '[role="checkbox"]' in _ACCEPT_LOGIN_TERMS_JS
 
 
 class ResponseContext:

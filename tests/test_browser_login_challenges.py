@@ -2,7 +2,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from utils.browser import TURNSTILE_WAIT_TIMEOUT_MS, _set_input_value, prepare_login_challenges, submit_login_form
+from utils.browser import (
+	TURNSTILE_WAIT_TIMEOUT_MS,
+	_first_visible_locator,
+	_set_input_value,
+	prepare_login_challenges,
+	submit_login_form,
+)
 
 
 class ResponseContext:
@@ -28,18 +34,53 @@ class TimeoutResponseContext:
 
 
 @pytest.mark.asyncio
-async def test_set_input_value_dispatches_controlled_form_events_after_fill():
+async def test_set_input_value_types_and_blurs_controlled_input():
 	locator = AsyncMock()
 	locator.input_value.return_value = 'account@example.test'
 
 	await _set_input_value(locator, 'account@example.test', 15_000)
 
-	locator.fill.assert_awaited_once_with('account@example.test', timeout=15_000)
-	locator.evaluate.assert_awaited_once()
-	event_script = locator.evaluate.await_args.args[0]
-	assert "new Event('input'" in event_script
-	assert "new Event('change'" in event_script
-	assert "new Event('blur'" in event_script
+	locator.fill.assert_awaited_once_with('', timeout=15_000)
+	locator.press_sequentially.assert_awaited_once_with('account@example.test', delay=20, timeout=15_000)
+	locator.press.assert_awaited_once_with('Tab', timeout=5000)
+	locator.evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_input_value_fallback_forces_value_transition_and_focusout():
+	locator = AsyncMock()
+	locator.press_sequentially.side_effect = RuntimeError('keyboard unavailable')
+	locator.press.side_effect = RuntimeError('tab unavailable')
+	locator.input_value.return_value = 'account@example.test'
+
+	await _set_input_value(locator, 'account@example.test', 15_000)
+
+	assert locator.evaluate.await_count == 2
+	value_script = locator.evaluate.await_args_list[0].args[0]
+	focus_script = locator.evaluate.await_args_list[1].args[0]
+	assert "setter?.call(el, '')" in value_script
+	assert "setter?.call(el, v)" in value_script
+	assert "new Event('input'" in value_script
+	assert "new Event('change'" in value_script
+	assert "new FocusEvent('focusout'" in focus_script
+
+
+@pytest.mark.asyncio
+async def test_first_visible_locator_checks_all_matches():
+	hidden = AsyncMock()
+	hidden.is_visible.return_value = False
+	visible = AsyncMock()
+	visible.is_visible.return_value = True
+	matches = MagicMock()
+	matches.count = AsyncMock(return_value=2)
+	matches.nth.side_effect = [hidden, visible]
+	page = MagicMock()
+	page.locator.return_value = matches
+
+	result = await _first_visible_locator(page, ('input[name="email"]',))
+
+	assert result is visible
+	assert matches.nth.call_count == 2
 
 
 @pytest.mark.asyncio

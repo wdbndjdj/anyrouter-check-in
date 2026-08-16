@@ -100,6 +100,82 @@ def parse_cookies(cookies_data):
 	return {}
 
 
+def _browser_user_info(result: dict | None) -> dict | None:
+	if not isinstance(result, dict):
+		return None
+	status = result.get('status')
+	body = result.get('body')
+	if status == 200 and isinstance(body, dict) and body.get('success'):
+		user_data = body.get('data', {})
+		quota = round(user_data.get('quota', 0) / 500000, 2)
+		used_quota = round(user_data.get('used_quota', 0) / 500000, 2)
+		return {
+			'success': True,
+			'quota': quota,
+			'used_quota': used_quota,
+			'display': f':money: Current balance: ${quota}, Used: ${used_quota}',
+		}
+	return {'success': False, 'error': f'Failed to get user info: HTTP {status or 0}'}
+
+
+async def execute_browser_check_in(page, account_name: str, provider_config, api_user: str | None):
+	"""在已登录页面内完成 WAF 保护的用户信息与签到请求。"""
+	result = await page.evaluate(
+		"""async ({ userInfoPath, signInPath, apiUserKey, apiUser }) => {
+			const baseHeaders = {
+				Accept: 'application/json, text/plain, */*',
+				'Cache-Control': 'no-store',
+				'X-Requested-With': 'XMLHttpRequest',
+			};
+			if (apiUser) baseHeaders[apiUserKey] = apiUser;
+			const request = async (path, options = {}) => {
+				const response = await fetch(path, {
+					credentials: 'include',
+					...options,
+					headers: { ...baseHeaders, ...(options.headers || {}) },
+				});
+				const text = await response.text();
+				let body;
+				try { body = JSON.parse(text); }
+				catch { body = { message: text.slice(0, 300) }; }
+				return { status: response.status, body };
+			};
+			const before = await request(userInfoPath);
+			const checkIn = await request(signInPath, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+			});
+			const after = await request(userInfoPath);
+			return { before, checkIn, after };
+		}""",
+		{
+			'userInfoPath': provider_config.user_info_path,
+			'signInPath': provider_config.sign_in_path,
+			'apiUserKey': provider_config.api_user_key,
+			'apiUser': api_user,
+		},
+	)
+
+	check_in = result.get('checkIn', {}) if isinstance(result, dict) else {}
+	status = check_in.get('status')
+	payload = check_in.get('body') if isinstance(check_in.get('body'), dict) else {}
+	message = str(payload.get('msg', payload.get('message', '')))
+	already_checked = any(
+		keyword in message.lower()
+		for keyword in ('已经签到', '已签到', '重复签到', 'already checked', 'already signed')
+	)
+	success = status == 200 and (
+		payload.get('ret') == 1 or payload.get('code') == 0 or payload.get('success') or already_checked
+	)
+	print(f'[RESPONSE] {account_name}: Browser check-in status code {status}')
+	if success:
+		print(f'[SUCCESS] {account_name}: Browser check-in successful!')
+	else:
+		print(f'[FAILED] {account_name}: Browser check-in failed - {message or f"HTTP {status}"}')
+
+	return success, _browser_user_info(result.get('before')), _browser_user_info(result.get('after'))
+
+
 async def get_waf_cookies_with_browser(
 	account_name: str,
 	login_url: str,
@@ -231,13 +307,26 @@ async def login_with_credentials(
 			cookie.get('name'): cookie.get('value') for cookie in cookies if cookie.get('name') and cookie.get('value')
 		}
 		api_user = str(user_profile['id']) if user_profile.get('id') is not None else None
+		browser_check_in_success = None
+		user_info_before = None
+		user_info_after = None
+		if provider_config.browser_check_in and provider_config.sign_in_path:
+			browser_check_in_success, user_info_before, user_info_after = await execute_browser_check_in(
+				page, account_name, provider_config, api_user
+			)
 
 		success_msg = f'[SUCCESS] {account_name}: Login successful, got {len(all_cookies)} cookies'
 		if is_debug_enabled() and api_user:
 			success_msg += f', api_user={api_user}'
 		print(success_msg)
 		await context.close()
-		return BrowserLoginResult(cookies=all_cookies, api_user=api_user)
+		return BrowserLoginResult(
+			cookies=all_cookies,
+			api_user=api_user,
+			check_in_success=browser_check_in_success,
+			user_info_before=user_info_before,
+			user_info_after=user_info_after,
+		)
 
 	except Exception as e:
 		print(f'[FAILED] {account_name}: Error during login: {e}')
@@ -417,6 +506,9 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 	# 邮箱密码优先
 	all_cookies = None
 	resolved_api_user: str | None = None
+	browser_check_in_success: bool | None = None
+	browser_user_info_before: dict | None = None
+	browser_user_info_after: dict | None = None
 	auth_method = None
 	if account.has_login_credentials():
 		print(f'[INFO] {account_name}: Attempting email/password login (priority)...')
@@ -431,6 +523,9 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		if login_result:
 			all_cookies = login_result.cookies
 			resolved_api_user = login_result.api_user
+			browser_check_in_success = login_result.check_in_success
+			browser_user_info_before = login_result.user_info_before
+			browser_user_info_after = login_result.user_info_after
 			auth_method = 'email/password'
 		else:
 			print(f'[FAILED] {account_name}: Email/password login failed, will not use stale session cookies')
@@ -447,6 +542,8 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		return False, None, None
 
 	print(f'[AUTH] {account_name}: Using auth method -> {auth_method}')
+	if browser_check_in_success is not None:
+		return browser_check_in_success, browser_user_info_before, browser_user_info_after
 
 	return run_check_in_requests(
 		all_cookies,

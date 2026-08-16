@@ -141,19 +141,34 @@ _OPEN_EMAIL_FORM_JS = """() => {
 }"""
 
 _ACCEPT_LOGIN_TERMS_JS = """() => {
-	const textMatches = (el) => /我已阅读|我已同意|用户协议|隐私政策/i.test(el?.innerText || el?.textContent || '');
-	const candidates = [
-		...document.querySelectorAll('label'),
-		...document.querySelectorAll('.semi-checkbox'),
-	].filter(textMatches);
+	const termsPattern = /我已阅读|我已同意|用户协议|隐私政策|I have read|I agree|User Agreement|Privacy Policy|Terms(?: of Service)?/i;
+	const controls = document.querySelectorAll('input[type="checkbox"], [role="checkbox"]');
 	let accepted = 0;
-	for (const candidate of candidates) {
-		const checkbox = candidate.matches('input[type="checkbox"]')
-			? candidate
-			: candidate.querySelector('input[type="checkbox"]');
-		if (!checkbox || checkbox.checked) continue;
-		candidate.click();
-		if (checkbox.checked) accepted += 1;
+	for (const checkbox of controls) {
+		const labelledBy = (checkbox.getAttribute('aria-labelledby') || '')
+			.split(/\\s+/)
+			.filter(Boolean)
+			.map((id) => document.getElementById(id)?.textContent || '')
+			.join(' ');
+		const labels = checkbox.labels ? [...checkbox.labels] : [];
+		const wrapper = checkbox.closest('label, .semi-checkbox') || checkbox.parentElement;
+		const parent = wrapper?.parentElement;
+		const parentText = parent?.querySelectorAll('input[type="checkbox"], [role="checkbox"]').length === 1
+			? parent.innerText || parent.textContent || ''
+			: '';
+		const agreementText = [
+			checkbox.getAttribute('aria-label') || '',
+			labelledBy,
+			...labels.map((label) => label.innerText || label.textContent || ''),
+			wrapper?.innerText || wrapper?.textContent || '',
+			parentText,
+		].join(' ');
+		if (!termsPattern.test(agreementText)) continue;
+		const isChecked = () => checkbox.checked || checkbox.getAttribute('aria-checked') === 'true';
+		if (isChecked()) continue;
+		const clickTarget = checkbox.matches('[role="checkbox"]') ? checkbox : labels[0] || wrapper || checkbox;
+		clickTarget.click();
+		if (isChecked()) accepted += 1;
 	}
 	return accepted;
 }"""
@@ -509,10 +524,12 @@ async def wait_for_waf_ready(page: Page, timeout_ms: int = WAF_READY_TIMEOUT_MS)
 
 async def _first_visible_locator(page: Page, selectors: tuple[str, ...]) -> Locator | None:
 	for selector in selectors:
-		locator = page.locator(selector).first
 		try:
-			if await locator.is_visible():
-				return locator
+			matches = page.locator(selector)
+			for index in range(await matches.count()):
+				locator = matches.nth(index)
+				if await locator.is_visible():
+					return locator
 		except Exception:  # nosec B112
 			continue
 	return None
@@ -711,24 +728,34 @@ async def _set_input_value(locator: Locator, value: str, timeout_ms: int) -> Non
 			pass
 
 	try:
-		await locator.fill(value, timeout=timeout_ms)
-	except Exception:  # nosec B110
-		pass
+		# Keyboard input keeps React/Semi's controlled value tracker in sync.
+		await locator.fill('', timeout=timeout_ms)
+		await locator.press_sequentially(value, delay=20, timeout=timeout_ms)
+	except Exception:
+		# Force a real value transition so React does not discard the input event.
+		await locator.evaluate(
+			"""(el, v) => {
+				const setter = Object.getOwnPropertyDescriptor(
+					window.HTMLInputElement.prototype, 'value'
+				)?.set;
+				setter?.call(el, '');
+				el.dispatchEvent(new Event('input', { bubbles: true }));
+				setter?.call(el, v);
+				el.dispatchEvent(new Event('input', { bubbles: true }));
+				el.dispatchEvent(new Event('change', { bubbles: true }));
+			}""",
+			value,
+		)
 
-	# Semi UI's controlled form can miss Playwright's synthetic fill event.
-	# Re-apply the native value setter and dispatch the events its state hook reads.
-	await locator.evaluate(
-		"""(el, v) => {
-			const setter = Object.getOwnPropertyDescriptor(
-				window.HTMLInputElement.prototype, 'value'
-			)?.set;
-			setter?.call(el, v);
-			el.dispatchEvent(new Event('input', { bubbles: true }));
-			el.dispatchEvent(new Event('change', { bubbles: true }));
-			el.dispatchEvent(new Event('blur', { bubbles: true }));
-		}""",
-		value,
-	)
+	try:
+		await locator.press('Tab', timeout=click_timeout)
+	except Exception:
+		await locator.evaluate(
+			"""(el) => {
+				el.dispatchEvent(new FocusEvent('blur', { bubbles: false }));
+				el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+			}"""
+		)
 	if await locator.input_value(timeout=2000) != value:
 		raise RuntimeError('Login input value was not applied')
 

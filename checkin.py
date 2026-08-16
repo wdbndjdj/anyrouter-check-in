@@ -124,6 +124,7 @@ async def execute_browser_check_in(page, account_name: str, provider_config, api
 		"""async ({ userInfoPath, signInPath, apiUserKey, apiUser }) => {
 			const baseHeaders = {
 				Accept: 'application/json, text/plain, */*',
+				'Cache-Control': 'no-store',
 				'X-Requested-With': 'XMLHttpRequest',
 			};
 			if (apiUser) baseHeaders[apiUserKey] = apiUser;

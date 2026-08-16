@@ -808,17 +808,52 @@ async def submit_login_form(page: Page, timeout_ms: int) -> None:
 		raise TimeoutError(f'Cannot find submit button: {SUBMIT_SELECTORS}')
 
 	def is_login_response(response) -> bool:
-		return urlparse(response.url).path == '/api/user/login'
+		return urlparse(response.url).path.rstrip('/') == '/api/user/login'
 
 	try:
+		form_state = await submit.evaluate(
+			"""(button) => {
+				const form = button.form;
+				return {
+					disabled: Boolean(button.disabled),
+					ariaDisabled: button.getAttribute('aria-disabled'),
+					type: button.getAttribute('type'),
+					formValid: form ? form.checkValidity() : null,
+					formAction: form?.getAttribute('action') || null,
+				};
+			}"""
+		)
+		debug_print(f'[INFO] Login submit state: {form_state}')
+	except Exception as exc:  # nosec B110
+		debug_print(f'[INFO] Login submit state unavailable: {exc}')
+
+	async def wait_for_response(action) -> object:
 		async with page.expect_response(is_login_response, timeout=action_timeout) as response_info:
-			try:
-				await submit.click(timeout=action_timeout)
-			except Exception:
-				await submit.click(force=True, timeout=action_timeout)
-		login_response = await response_info.value
-	except Exception as exc:
-		raise RuntimeError('Login form submission did not reach /api/user/login') from exc
+			await action()
+		return await response_info.value
+
+	login_response = None
+	last_error: Exception | None = None
+	for action in (
+		lambda: submit.click(timeout=action_timeout),
+		lambda: submit.click(force=True, timeout=action_timeout),
+		lambda: submit.evaluate(
+			"""(button) => {
+				const form = button.form;
+				if (!form) throw new Error('Login submit button has no form');
+				if (typeof form.requestSubmit === 'function') form.requestSubmit(button);
+				else form.submit();
+			}"""
+		),
+	):
+		try:
+			login_response = await wait_for_response(action)
+			break
+		except Exception as exc:  # nosec B110
+			last_error = exc
+			debug_print(f'[INFO] Login submit attempt did not reach /api/user/login: {exc}')
+	if login_response is None:
+		raise RuntimeError('Login form submission did not reach /api/user/login') from last_error
 
 	try:
 		payload = await login_response.json()

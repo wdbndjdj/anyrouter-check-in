@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from utils.debug import debug_print, is_debug_enabled
 from utils.popups import dismiss_popups, setup_popup_guard
@@ -355,8 +356,6 @@ async def navigate_login_page(
 	account_name: str = '',
 ) -> None:
 	"""预热站点、导航登录页并等待 SPA 渲染完成。"""
-	from urllib.parse import urlparse
-
 	parsed = urlparse(login_url)
 	base_url = f'{parsed.scheme}://{parsed.netloc}/'
 	attempt_timeout = min(timeout_ms, 60_000)
@@ -807,10 +806,41 @@ async def submit_login_form(page: Page, timeout_ms: int) -> None:
 				continue
 	if not submit:
 		raise TimeoutError(f'Cannot find submit button: {SUBMIT_SELECTORS}')
+
+	def is_login_response(response) -> bool:
+		return urlparse(response.url).path == '/api/user/login'
+
 	try:
-		await submit.click(timeout=action_timeout)
-	except Exception:
-		await submit.click(force=True, timeout=action_timeout)
+		async with page.expect_response(is_login_response, timeout=action_timeout) as response_info:
+			try:
+				await submit.click(timeout=action_timeout)
+			except Exception:
+				await submit.click(force=True, timeout=action_timeout)
+		login_response = await response_info.value
+	except Exception as exc:
+		raise RuntimeError('Login form submission did not reach /api/user/login') from exc
+
+	try:
+		payload = await login_response.json()
+	except Exception as exc:
+		raise RuntimeError(f'Login endpoint returned HTTP {login_response.status} without JSON') from exc
+
+	if not isinstance(payload, dict):
+		raise RuntimeError('Login endpoint returned an unexpected response')
+
+	success = payload.get('success') is True
+	message = str(payload.get('message') or payload.get('msg') or '').strip()
+	print(
+		f'[INFO] Login API response: HTTP {login_response.status}, success={success}, '
+		f'message={message[:160] or "-"}'
+	)
+	if not success:
+		raise RuntimeError(f'Login rejected by server: {message or "unknown reason"}')
+
+	data = payload.get('data')
+	if isinstance(data, dict) and data.get('require_2fa'):
+		raise RuntimeError('Login requires two-factor authentication')
+
 	await _wait_for_optional_load_state(page, 'domcontentloaded', action_timeout)
 	await _wait_for_optional_load_state(page, 'networkidle', min(timeout_ms, 30_000))
 	await wait_for_logged_in(page, SESSION_WAIT_TIMEOUT_MS)

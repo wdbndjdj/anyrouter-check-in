@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from utils.browser import TURNSTILE_WAIT_TIMEOUT_MS, prepare_login_challenges, submit_login_form
+from utils.browser import TURNSTILE_WAIT_TIMEOUT_MS, _set_input_value, prepare_login_challenges, submit_login_form
 
 
 class ResponseContext:
@@ -25,6 +25,21 @@ class TimeoutResponseContext:
 
 	async def __aexit__(self, exc_type, exc, traceback):
 		raise TimeoutError('response timed out')
+
+
+@pytest.mark.asyncio
+async def test_set_input_value_dispatches_controlled_form_events_after_fill():
+	locator = AsyncMock()
+	locator.input_value.return_value = 'account@example.test'
+
+	await _set_input_value(locator, 'account@example.test', 15_000)
+
+	locator.fill.assert_awaited_once_with('account@example.test', timeout=15_000)
+	locator.evaluate.assert_awaited_once()
+	event_script = locator.evaluate.await_args.args[0]
+	assert "new Event('input'" in event_script
+	assert "new Event('change'" in event_script
+	assert "new Event('blur'" in event_script
 
 
 @pytest.mark.asyncio

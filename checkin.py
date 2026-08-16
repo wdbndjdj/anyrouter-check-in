@@ -44,6 +44,8 @@ load_dotenv()
 
 BALANCE_HASH_FILE = 'balance_hash.txt'
 DEFAULT_CHECKIN_RETRY_DELAYS = (15.0, 45.0)
+DEFAULT_BROWSER_CHECKIN_RETRY_DELAYS = (90.0, 180.0)
+DEFAULT_BROWSER_ACCOUNT_COOLDOWN_SECONDS = 60.0
 TRANSIENT_CHECKIN_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
 TRANSIENT_CHECKIN_ERROR_KEYWORDS = (
 	'lock_write',
@@ -126,7 +128,7 @@ async def execute_browser_check_in(
 	login_user: dict | None = None,
 ):
 	"""在已登录页面内完成 WAF 保护的用户信息与签到请求。"""
-	retry_delays_ms = [int(delay * 1000) for delay in get_check_in_retry_delays()]
+	retry_delays_ms = [int(delay * 1000) for delay in get_browser_check_in_retry_delays()]
 	result = await page.evaluate(
 		"""async ({ userInfoPath, signInPath, apiUserKey, apiUser, loginUser, retryDelaysMs }) => {
 			const baseHeaders = {
@@ -418,6 +420,38 @@ def get_check_in_retry_delays() -> tuple[float, ...]:
 	except ValueError:
 		print('[WARN] Invalid CHECKIN_RETRY_DELAYS; using default retry schedule')
 		return DEFAULT_CHECKIN_RETRY_DELAYS
+
+
+def get_browser_check_in_retry_delays() -> tuple[float, ...]:
+	"""读取浏览器签到重试间隔，默认使用更长的 WAF 限流退避。"""
+	raw_delays = os.getenv('BROWSER_CHECKIN_RETRY_DELAYS', '').strip()
+	if not raw_delays:
+		return DEFAULT_BROWSER_CHECKIN_RETRY_DELAYS
+
+	try:
+		delays = tuple(float(value.strip()) for value in raw_delays.split(',') if value.strip())
+		if not delays or any(delay < 0 or not math.isfinite(delay) for delay in delays):
+			raise ValueError
+		return delays
+	except ValueError:
+		print('[WARN] Invalid BROWSER_CHECKIN_RETRY_DELAYS; using default retry schedule')
+		return DEFAULT_BROWSER_CHECKIN_RETRY_DELAYS
+
+
+def get_browser_account_cooldown_seconds() -> float:
+	"""读取同一浏览器签到 provider 的账号间冷却时间。"""
+	raw_cooldown = os.getenv('BROWSER_ACCOUNT_COOLDOWN_SECONDS', '').strip()
+	if not raw_cooldown:
+		return DEFAULT_BROWSER_ACCOUNT_COOLDOWN_SECONDS
+
+	try:
+		cooldown = float(raw_cooldown)
+		if cooldown < 0 or not math.isfinite(cooldown):
+			raise ValueError
+		return cooldown
+	except ValueError:
+		print('[WARN] Invalid BROWSER_ACCOUNT_COOLDOWN_SECONDS; using default cooldown')
+		return DEFAULT_BROWSER_ACCOUNT_COOLDOWN_SECONDS
 
 
 def is_transient_check_in_error(error_msg: str) -> bool:
@@ -748,6 +782,17 @@ async def main():
 			need_notify = True
 			notification_content.append(f'[FAIL] {account_name} exception: {str(e)[:50]}...')
 
+		if i < total_count - 1 and account.provider == accounts[i + 1].provider:
+			provider_config = app_config.get_provider(account.provider)
+			if provider_config and provider_config.browser_check_in:
+				cooldown = get_browser_account_cooldown_seconds()
+				if cooldown > 0:
+					print(
+						f'[INFO] Cooling down {cooldown:g}s before the next '
+						f'{account.provider} browser check-in account'
+					)
+					await asyncio.sleep(cooldown)
+
 	current_balance_hash = generate_balance_hash(current_balances) if current_balances else None
 	if current_balance_hash:
 		if last_balance_hash is None:
@@ -826,3 +871,4 @@ def run_main():
 
 if __name__ == '__main__':
 	run_main()
+

@@ -1,10 +1,11 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 
 import checkin
-from checkin import execute_check_in, get_check_in_retry_delays
+from checkin import execute_browser_check_in, execute_check_in, get_check_in_retry_delays
 
 
 def response(status_code: int, payload: dict | None = None, text: str | None = None) -> MagicMock:
@@ -77,3 +78,26 @@ def test_non_finite_retry_delays_use_defaults(monkeypatch):
 	monkeypatch.setenv('CHECKIN_RETRY_DELAYS', 'nan,inf')
 
 	assert get_check_in_retry_delays() == checkin.DEFAULT_CHECKIN_RETRY_DELAYS
+
+
+@pytest.mark.asyncio
+async def test_browser_check_in_uses_logged_in_page_context():
+	page = AsyncMock()
+	page.evaluate.return_value = {
+		'before': {'status': 200, 'body': {'success': True, 'data': {'quota': 500000, 'used_quota': 0}}},
+		'checkIn': {'status': 200, 'body': {'success': True}},
+		'after': {'status': 200, 'body': {'success': True, 'data': {'quota': 1000000, 'used_quota': 0}}},
+	}
+	provider_config = SimpleNamespace(
+		user_info_path='/api/user/self',
+		sign_in_path='/api/user/checkin',
+		api_user_key='new-api-user',
+	)
+
+	success, before, after = await execute_browser_check_in(page, 'account', provider_config, '42')
+
+	assert success is True
+	assert before['quota'] == 1.0
+	assert after['quota'] == 2.0
+	assert page.evaluate.await_args.args[1]['apiUser'] == '42'
+	assert "'Cache-Control': 'no-store'" in page.evaluate.await_args.args[0]

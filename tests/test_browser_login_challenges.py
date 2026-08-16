@@ -97,7 +97,7 @@ async def test_submit_login_form_accepts_successful_login(mocker):
 
 
 @pytest.mark.asyncio
-async def test_submit_login_form_falls_back_to_native_form_submission(mocker):
+async def test_submit_login_form_enables_disabled_button_fallback(mocker):
 	submit = AsyncMock()
 	submit.evaluate.side_effect = [
 		{'disabled': True, 'ariaDisabled': None, 'type': 'submit', 'formValid': True, 'formAction': None},
@@ -121,3 +121,4 @@ async def test_submit_login_form_falls_back_to_native_form_submission(mocker):
 	assert submit.click.await_args_list[0].kwargs == {'timeout': 15_000}
 	assert submit.click.await_args_list[1].kwargs == {'force': True, 'timeout': 15_000}
 	assert submit.evaluate.await_count == 2
+	assert 'button.disabled = false' in submit.evaluate.await_args_list[1].args[0]

@@ -100,4 +100,7 @@ async def test_browser_check_in_uses_logged_in_page_context():
 	assert before['quota'] == 1.0
 	assert after['quota'] == 2.0
 	assert page.evaluate.await_args.args[1]['apiUser'] == '42'
+	assert page.evaluate.await_args.args[1]['loginUser'] is None
+	assert page.evaluate.await_args.args[1]['retryDelaysMs'] == [15000, 45000]
 	assert "'Cache-Control': 'no-store'" in page.evaluate.await_args.args[0]
+	assert 'retry ? [0, ...retryDelaysMs] : [0]' in page.evaluate.await_args.args[0]

@@ -19,6 +19,14 @@ class ResponseContext:
 		return False
 
 
+class TimeoutResponseContext:
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, traceback):
+		raise TimeoutError('response timed out')
+
+
 @pytest.mark.asyncio
 async def test_prepare_login_challenges_accepts_terms_and_waits_for_turnstile(capsys):
 	page = AsyncMock()
@@ -86,3 +94,30 @@ async def test_submit_login_form_accepts_successful_login(mocker):
 
 	assert wait_load.await_count == 2
 	wait_login.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_submit_login_form_falls_back_to_native_form_submission(mocker):
+	submit = AsyncMock()
+	submit.evaluate.side_effect = [
+		{'disabled': True, 'ariaDisabled': None, 'type': 'submit', 'formValid': True, 'formAction': None},
+		None,
+	]
+	response = MagicMock(url='https://example.test/api/user/login/', status=200)
+	response.json = AsyncMock(return_value={'success': True, 'data': {'id': 42}})
+	page = MagicMock()
+	page.expect_response.side_effect = [
+		TimeoutResponseContext(),
+		TimeoutResponseContext(),
+		ResponseContext(response),
+	]
+	mocker.patch('utils.browser._wait_for_optional_load_state', new=AsyncMock(return_value=True))
+	mocker.patch('utils.browser.wait_for_logged_in', new=AsyncMock(return_value=True))
+	mocker.patch('utils.browser._first_visible_locator', new=AsyncMock(return_value=submit))
+
+	await submit_login_form(page, 30_000)
+
+	assert submit.click.await_count == 2
+	assert submit.click.await_args_list[0].kwargs == {'timeout': 15_000}
+	assert submit.click.await_args_list[1].kwargs == {'force': True, 'timeout': 15_000}
+	assert submit.evaluate.await_count == 2

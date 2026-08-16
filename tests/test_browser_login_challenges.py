@@ -159,8 +159,9 @@ async def test_submit_login_form_accepts_successful_login(mocker):
 	wait_login = mocker.patch('utils.browser.wait_for_logged_in', new=AsyncMock(return_value=True))
 	mocker.patch('utils.browser._first_visible_locator', new=AsyncMock(return_value=submit))
 
-	await submit_login_form(page, 30_000)
+	result = await submit_login_form(page, 30_000)
 
+	assert result == {'id': 42}
 	assert wait_load.await_count == 2
 	wait_login.assert_awaited_once()
 

@@ -264,6 +264,7 @@ async def login_with_credentials(
 		return None
 
 	page = None
+	login_profile = None
 	try:
 		page = await context.new_page()
 		await prepare_browser_page(page)
@@ -279,7 +280,7 @@ async def login_with_credentials(
 			if await has_session_cookie(page):
 				print(f'[WARN] {account_name}: Stale session cookie on login page, forcing email login')
 			await save_login_screenshot(page, provider_name, account_name, 'before-email-login')
-			await login_with_email_form(
+			login_profile = await login_with_email_form(
 				page,
 				email,
 				password,
@@ -292,6 +293,9 @@ async def login_with_credentials(
 
 		console_url = f'{provider_config.domain}/console'
 		user_profile = await verify_browser_login(page, console_url, timeout_ms)
+		if not user_profile and isinstance(login_profile, dict) and login_profile.get('id'):
+			print(f'[WARN] {account_name}: Using verified login API user after /api/user/self timeout')
+			user_profile = login_profile
 		if not user_profile:
 			cookies = await context.cookies()
 			cookie_names = [c.get('name') for c in cookies if c.get('name')]

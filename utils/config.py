@@ -23,6 +23,7 @@ class ProviderConfig:
 	waf_cookie_names: List[str] | None = None
 	use_proxy: bool = False
 	persist_profile: bool = False
+	browser_check_in: bool = False
 
 	def __post_init__(self):
 		required_waf_cookies = set()
@@ -50,6 +51,7 @@ class ProviderConfig:
 		"""
 		default_use_proxy = defaults.use_proxy if defaults else False
 		default_persist_profile = defaults.persist_profile if defaults else False
+		default_browser_check_in = defaults.browser_check_in if defaults else False
 		return cls(
 			name=name,
 			domain=data['domain'],
@@ -61,6 +63,7 @@ class ProviderConfig:
 			waf_cookie_names=data.get('waf_cookie_names', defaults.waf_cookie_names if defaults else None),
 			use_proxy=data.get('use_proxy', default_use_proxy),
 			persist_profile=data.get('persist_profile', default_persist_profile),
+			browser_check_in=data.get('browser_check_in', default_browser_check_in),
 		)
 
 	def needs_waf_cookies(self) -> bool:

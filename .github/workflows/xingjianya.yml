@@ -73,7 +73,7 @@ jobs:
         env:
           ANYROUTER_ACCOUNTS: ${{ secrets.XINGJIANYA_ACCOUNT }}
           PROVIDERS: >-
-            {"xingjianya":{"domain":"https://new.xinjianya.top","login_path":"/login","sign_in_path":"/api/user/checkin","user_info_path":"/api/user/self","api_user_key":"new-api-user","bypass_method":null,"use_proxy":true,"persist_profile":false}}
+            {"xingjianya":{"domain":"https://new.xinjianya.top","login_path":"/login","sign_in_path":"/api/user/checkin","user_info_path":"/api/user/self","api_user_key":"new-api-user","bypass_method":null,"use_proxy":true,"persist_profile":false,"browser_check_in":true}}
           CHECKIN_HEADLESS: false
           CHECKIN_HUMANIZE: true
           CHECKIN_WAIT_TIMEOUT_MS: 120000

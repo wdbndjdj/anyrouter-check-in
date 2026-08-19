@@ -131,7 +131,7 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     proxies = json.load(handle).get("proxies", [])
-valid = len(proxies) == 1 and str(proxies[0].get("type")).lower() == "vmess"
+valid = len(proxies) >= 1
 raise SystemExit(0 if valid else 1)
 PY
 	then

@@ -8,6 +8,7 @@ from seekai_checkin import (
 	bearer_headers,
 	checkin_response_result,
 	checkin_status,
+	extract_refresh_result,
 	parse_accounts,
 	parse_cookies,
 )
@@ -26,11 +27,27 @@ def test_parse_accounts_requires_auth_material():
 		parse_accounts('[{"name":"one"}]')
 
 
+def test_parse_accounts_accepts_single_object_and_api_user_alias():
+	account = parse_accounts('{"name":"one","cookies":"session=abc","api_user":29704}')[0]
+	assert account.user_id == '29704'
+	assert account.cookies == {'session': 'abc'}
+
+
 def test_bearer_headers_include_optional_session_header():
 	account = SeekAIAccount('one', {}, 'TOKEN', 'SID')
 	headers = bearer_headers(account)
 	assert headers['Authorization'] == 'Bearer TOKEN'
 	assert headers['X-Auth-Session'] == 'SID'
+	assert 'new-api-user' not in headers
+
+
+def test_refresh_result_validates_user_id_without_using_it_as_a_header():
+	account = SeekAIAccount('one', {'session': 'abc'}, user_id='29704')
+	token, user_id = extract_refresh_result({'access_token': 'NEW', 'user': {'id': 29704}}, account)
+	assert token == 'NEW'
+	assert user_id == '29704'
+	with pytest.raises(ValueError, match='refresh user id mismatch'):
+		extract_refresh_result({'access_token': 'NEW', 'user': {'id': 999}}, account)
 
 
 def test_checkin_status_reads_nested_stats():

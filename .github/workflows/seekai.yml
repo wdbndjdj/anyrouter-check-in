@@ -79,7 +79,8 @@ jobs:
 
       - name: 执行 SeekAI 签到
         env:
-          SEEKAI_ACCOUNTS: ${{ secrets.SEEKAI_ACCOUNT || secrets.SEEKAI_ACCOUNTS }}
+          SEEKAI_ACCOUNT: ${{ secrets.SEEKAI_ACCOUNT }}
+          SEEKAI_ACCOUNTS: ${{ secrets.SEEKAI_ACCOUNTS }}
           SEEKAI_USE_PROXY: ${{ secrets.SEEKAI_USE_PROXY || 'false' }}
           CHECKIN_HEADLESS: false
           CHECKIN_HUMANIZE: true

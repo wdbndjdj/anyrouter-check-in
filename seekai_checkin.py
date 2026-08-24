@@ -24,6 +24,7 @@ from utils.browser import (
 	launch_login_context,
 	load_browser_login_settings,
 	prepare_browser_page,
+	save_login_screenshot,
 )
 
 load_dotenv()
@@ -68,6 +69,8 @@ def parse_cookies(value: object) -> dict[str, str]:
 	if not isinstance(value, str):
 		return {}
 	text = value.strip()
+	if text.lower().startswith('cookie:'):
+		text = text.split(':', 1)[1].strip()
 	if text.startswith(('{', '[')):
 		try:
 			return parse_cookies(json.loads(text))
@@ -95,7 +98,7 @@ def parse_accounts(raw: str | None) -> list[SeekAIAccount]:
 		if isinstance(payload, dict):
 			payload = [payload]
 		else:
-			raise ValueError('SEEKAI_ACCOUNTS must be a non-empty JSON array')
+			raise ValueError('SEEKAI_ACCOUNTS must be a non-empty JSON object or array')
 
 	accounts: list[SeekAIAccount] = []
 	for index, item in enumerate(payload, start=1):
@@ -163,7 +166,8 @@ def checkin_response_result(payload: object, *, status: int, url: str = '') -> C
 	body = payload if isinstance(payload, dict) else {}
 	message = str(body.get('message', body.get('msg', '')))
 	if status in {200, 201} and body.get('success') is True:
-		data = body.get('data') if isinstance(body.get('data'), dict) else {}
+		data_value = body.get('data')
+		data = data_value if isinstance(data_value, dict) else {}
 		return CheckinResult(True, quota_awarded=data.get('quota_awarded'), message=message)
 	if 'already' in message.lower() or '已签到' in message or '已经签到' in message:
 		return CheckinResult(True, already_checked=True, message=message)
@@ -172,7 +176,7 @@ def checkin_response_result(payload: object, *, status: int, url: str = '') -> C
 	return CheckinResult(False, message=message or f'HTTP {status}')
 
 
-async def _add_account_cookies(context: Any, account: SeekAIAccount) -> None:
+async def _add_account_cookies(context: Any, account: SeekAIAccount, *, force: bool = False) -> None:
 	if not account.cookies:
 		return
 	existing = {cookie.get('name') for cookie in await context.cookies([BASE_URL])}
@@ -185,7 +189,7 @@ async def _add_account_cookies(context: Any, account: SeekAIAccount) -> None:
 			'secure': True,
 		}
 		for name, value in account.cookies.items()
-		if name != 'new_api_refresh' or name not in existing
+		if force or name != 'new_api_refresh' or name not in existing
 	]
 	if cookies:
 		await context.add_cookies(cookies)
@@ -214,7 +218,7 @@ async def install_api_auth_route(page: Any, auth_state: dict[str, str | None]) -
 async def _page_api(
 	page: Any, path: str, *, method: str = 'GET', headers: dict[str, str] | None = None
 ) -> dict[str, Any]:
-	return await page.evaluate(
+	result = await page.evaluate(
 		"""async ({ path, method, headers }) => {
 			const response = await fetch(path, {
 				method,
@@ -228,13 +232,7 @@ async def _page_api(
 		}""",
 		{'path': path, 'method': method, 'headers': headers or {}},
 	)
-
-
-async def refresh_access_token(page: Any, account: SeekAIAccount) -> str | None:
-	"""Refresh a Bearer token using the imported session cookie."""
-	result = await _page_api(page, REFRESH_PATH, method='POST', headers=bearer_headers(account))
-	token, _ = extract_refresh_result(_json_body(result), account)
-	return str(token) if token else account.access_token
+	return result if isinstance(result, dict) else {}
 
 
 def extract_refresh_result(payload: object, account: SeekAIAccount) -> tuple[str | None, str | None]:
@@ -247,9 +245,16 @@ def extract_refresh_result(payload: object, account: SeekAIAccount) -> tuple[str
 	if not isinstance(user, dict):
 		user = data.get('user') if isinstance(data, dict) and isinstance(data.get('user'), dict) else None
 	refreshed_user_id = str(user.get('id')) if isinstance(user, dict) and user.get('id') is not None else None
-	if account.user_id and refreshed_user_id and account.user_id != refreshed_user_id:
+	if account.user_id and account.user_id != refreshed_user_id:
 		raise ValueError(f'refresh user id mismatch for {account.name}')
 	return (str(token) if token else None), refreshed_user_id
+
+
+async def refresh_access_token(page: Any, account: SeekAIAccount) -> str | None:
+	"""Explicit refresh helper for callers that do not navigate the SPA first."""
+	result = await _page_api(page, REFRESH_PATH, method='POST', headers=bearer_headers(account))
+	token, _ = extract_refresh_result(_json_body(result), account)
+	return token or account.access_token
 
 
 async def capture_refresh_response(response: Any, account: SeekAIAccount) -> tuple[str | None, str | None]:
@@ -321,22 +326,26 @@ async def click_and_complete_checkin(page: Any, account: SeekAIAccount, timeout_
 	page.on('response', on_response)
 	deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
 	last = CheckinResult(False, message='Turnstile response pending')
+	next_state_poll = 0.0
 	try:
 		await button.click()
 		while asyncio.get_running_loop().time() < deadline:
-			remaining = max(0.2, deadline - asyncio.get_running_loop().time())
+			now = asyncio.get_running_loop().time()
+			remaining = max(0.2, deadline - now)
 			try:
-				response = await asyncio.wait_for(responses.get(), timeout=min(2.0, remaining))
+				response = await asyncio.wait_for(responses.get(), timeout=min(1.0, remaining))
 			except TimeoutError:
 				response = None
 			if response is not None:
 				last = checkin_response_result(response['body'], status=response['status'], url=response['url'])
 				if last.success:
 					return last
-			state, _ = await read_checkin_state(page, account)
-			if state:
-				self_data = await read_self(page, account)
-				return CheckinResult(True, quota_awarded=self_data.get('quota_awarded'), message='checked_in_today')
+			if now >= next_state_poll:
+				state, _ = await read_checkin_state(page, account)
+				next_state_poll = now + 3.0
+				if state:
+					self_data = await read_self(page, account)
+					return CheckinResult(True, quota_awarded=self_data.get('quota_awarded'), message='checked_in_today')
 			await page.wait_for_timeout(250)
 		return last
 	finally:
@@ -351,6 +360,7 @@ async def run_account(account: SeekAIAccount) -> CheckinResult:
 		'access_token': account.access_token,
 		'session_id': account.session_id,
 	}
+	page: Any | None = None
 	try:
 		await _add_account_cookies(context, account)
 		page = await context.new_page()
@@ -378,23 +388,48 @@ async def run_account(account: SeekAIAccount) -> CheckinResult:
 			try:
 				refreshed, _ = await asyncio.wait_for(refresh_result, timeout=5)
 			except TimeoutError:
-				refreshed = account.access_token
+				# A profile restored from an older cache can load without the SPA
+				# refresh request.  Use one explicit refresh as a fallback; normal
+				# page loads never take this path, so the rotating cookie is not
+				# consumed twice in the common case.
+				try:
+					refreshed = await refresh_access_token(page, account)
+				except Exception:
+					refreshed = account.access_token
 		else:
 			refreshed, _ = refresh_result.result()
+		if not refreshed and account.cookies.get('new_api_refresh'):
+			# A restored profile can contain a rotated token that was interrupted
+			# before the cache was written.  Retry once with the configured seed
+			# cookie, without ever overwriting a healthy rotated cookie.
+			await context.clear_cookies()
+			await _add_account_cookies(context, account, force=True)
+			try:
+				refreshed = await refresh_access_token(page, account)
+			except Exception:
+				refreshed = account.access_token
+			if refreshed:
+				await page.reload(wait_until='domcontentloaded')
+				await page.wait_for_timeout(2_000)
 		if refreshed:
 			account = SeekAIAccount(account.name, account.cookies, refreshed, account.session_id, account.user_id)
 			auth_state['access_token'] = refreshed
 		checked, _ = await read_checkin_state(page, account)
 		if checked:
 			return CheckinResult(True, already_checked=True, message='Already checked in today')
-		return await click_and_complete_checkin(
+		result = await click_and_complete_checkin(
 			page, account, int(os.getenv('CHECKIN_WAIT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS))
 		)
+		if not result.success:
+			await save_login_screenshot(page, 'seekai', account.name, 'checkin-failed')
+		return result
+	except Exception:
+		if page is not None:
+			await save_login_screenshot(page, 'seekai', account.name, 'checkin-error')
+		raise
 	finally:
-		try:
+		if page is not None:
 			page.remove_listener('response', on_refresh)
-		except (UnboundLocalError, AttributeError):
-			pass
 		await context.close()
 
 

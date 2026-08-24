@@ -87,7 +87,7 @@ jobs:
           CHECKIN_WAIT_TIMEOUT_MS: 120000
           DEBUG_MODE: ${{ env.DEBUG_MODE }}
         run: |
-          if [[ -z "${SEEKAI_ACCOUNTS}" ]]; then
+          if [[ -z "${SEEKAI_ACCOUNT}" && -z "${SEEKAI_ACCOUNTS}" ]]; then
             echo "ERROR: SEEKAI_ACCOUNTS is not configured"
             exit 1
           fi

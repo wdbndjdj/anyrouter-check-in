@@ -353,7 +353,15 @@ async def click_and_complete_checkin(page: Any, account: SeekAIAccount, timeout_
 
 
 async def run_account(account: SeekAIAccount) -> CheckinResult:
-	settings = load_browser_login_settings(account.name, 'seekai', persist_profile=True)
+	# Access tokens are already scoped to one user.  Reusing a persistent profile
+	# for them can introduce a stale refresh cookie from another account, so keep
+	# token-backed runs isolated.  Cookie-only accounts retain the persistent
+	# profile used by the browser-login flow.
+	settings = load_browser_login_settings(
+		account.name,
+		'seekai',
+		persist_profile=not bool(account.access_token),
+	)
 	use_proxy = os.getenv('SEEKAI_USE_PROXY', 'false').lower() in {'1', 'true', 'yes'}
 	context = await launch_login_context(settings, use_proxy=use_proxy)
 	auth_state: dict[str, str | None] = {
@@ -361,12 +369,15 @@ async def run_account(account: SeekAIAccount) -> CheckinResult:
 		'session_id': account.session_id,
 	}
 	page: Any | None = None
+	refresh_listener_registered = False
 	try:
 		await _add_account_cookies(context, account)
 		page = await context.new_page()
 		await prepare_browser_page(page)
 		await install_api_auth_route(page, auth_state)
-		refresh_result: asyncio.Future[tuple[str | None, str | None]] = asyncio.get_running_loop().create_future()
+		# A supplied access token is the authoritative credential.  Only cookie-
+		# backed accounts need the SPA refresh response and its user-id check.
+		refresh_result: asyncio.Future[tuple[str | None, str | None]] | None = None
 
 		async def on_refresh(response: Any) -> None:
 			if '/api/user/auth/refresh' not in str(response.url) or response.request.method.upper() != 'POST':
@@ -380,11 +391,16 @@ async def run_account(account: SeekAIAccount) -> CheckinResult:
 			if not refresh_result.done():
 				refresh_result.set_result(value)
 
-		page.on('response', on_refresh)
+		if not account.access_token:
+			refresh_result = asyncio.get_running_loop().create_future()
+			page.on('response', on_refresh)
+			refresh_listener_registered = True
 		await page.goto(f'{BASE_URL}{PROFILE_PATH}')
 		await page.wait_for_load_state('domcontentloaded')
 		await page.wait_for_timeout(2_000)
-		if not refresh_result.done():
+		if refresh_result is None:
+			refreshed = account.access_token
+		elif not refresh_result.done():
 			try:
 				refreshed, _ = await asyncio.wait_for(refresh_result, timeout=5)
 			except TimeoutError:
@@ -428,7 +444,7 @@ async def run_account(account: SeekAIAccount) -> CheckinResult:
 			await save_login_screenshot(page, 'seekai', account.name, 'checkin-error')
 		raise
 	finally:
-		if page is not None:
+		if page is not None and refresh_listener_registered:
 			page.remove_listener('response', on_refresh)
 		await context.close()
 

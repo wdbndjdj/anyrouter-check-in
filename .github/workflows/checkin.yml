@@ -95,6 +95,7 @@ jobs:
         CHECKIN_HUMANIZE: true
         CHECKIN_WAIT_TIMEOUT_MS: 120000
         ANYROUTER_ACCOUNTS: ${{ secrets.ANYROUTER_ACCOUNTS }}
+        ANYROUTER_ACCOUNTS_EXTRA_20260913: ${{ secrets.ANYROUTER_ACCOUNTS_EXTRA_20260913 }}
         PROVIDERS: ${{ secrets.PROVIDERS }}
         DINGDING_WEBHOOK: ${{ secrets.DINGDING_WEBHOOK }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
@@ -114,7 +115,58 @@ jobs:
         BARK_KEY: ${{ secrets.BARK_KEY }}
         BARK_SERVER: ${{ secrets.BARK_SERVER }}
       run: |
-        xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
+        python - <<'PY'
+        import json
+        import os
+        import subprocess
+        import sys
+        
+        extra_key = "ANYROUTER_ACCOUNTS_EXTRA_20260913"
+        try:
+            base = json.loads(os.environ["ANYROUTER_ACCOUNTS"])
+            extra = json.loads(os.environ.get(extra_key) or "[]")
+            if not isinstance(base, list) or not isinstance(extra, list):
+                raise ValueError
+            if any(not isinstance(a, dict) for a in base + extra):
+                raise ValueError
+            for a in extra:
+                if a.get("provider", "anyrouter") != "anyrouter":
+                    raise ValueError
+                if not all(isinstance(a.get(k), str) and a[k] for k in ("email", "password")):
+                    raise ValueError
+        except (KeyError, ValueError, TypeError):
+            print("Account configuration invalid; check base/extra Secrets.", file=sys.stderr)
+            sys.exit(2)
+        
+        def identities(a):
+            provider = a.get("provider", "anyrouter")
+            keys = set()
+            if a.get("email"):
+                keys.add((provider, "email", str(a["email"])))
+            if a.get("api_user") is not None:
+                keys.add((provider, "api_user", str(a["api_user"])))
+            return keys
+        
+        seen = set().union(*(identities(a) for a in base))
+        merged = list(base)
+        added = 0
+        for a in extra:
+            keys = identities(a)
+            if keys & seen:
+                continue
+            merged.append(a)
+            seen.update(keys)
+            added += 1
+        print(f"Extra accounts: added={added}, skipped={len(extra)-added}", flush=True)
+        env = dict(os.environ)
+        env.pop(extra_key, None)
+        env["ANYROUTER_ACCOUNTS"] = json.dumps(merged, ensure_ascii=False)
+        result = subprocess.run(
+            ["xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24", "uv", "run", "checkin.py"],
+            env=env,
+        )
+        sys.exit(result.returncode)
+        PY
 
     - name: 上传调试截图
       if: always() && env.DEBUG_MODE == 'true'

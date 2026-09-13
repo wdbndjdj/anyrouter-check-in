@@ -78,6 +78,7 @@ jobs:
           ANYROUTER_ACCOUNTS_EXTRA: ${{ secrets.AGENTROUTER_ACCOUNTS_EXTRA }}
           ANYROUTER_ACCOUNTS_ADDED: ${{ secrets.AGENTROUTER_ACCOUNTS_13_17 }}
           ANYROUTER_ACCOUNTS_MORE: ${{ secrets.AGENTROUTER_ACCOUNTS_18_21 }}
+          ANYROUTER_ACCOUNTS_SINGLE: ${{ secrets.AGENTROUTER_ACCOUNTS_22 }}
           CHECKIN_HEADLESS: false
           CHECKIN_HUMANIZE: true
           CHECKIN_HUMANIZE_AGENTROUTER: true
@@ -100,6 +101,11 @@ jobs:
 
           if [[ -z "$ANYROUTER_ACCOUNTS_MORE" ]]; then
             echo "ERROR: AGENTROUTER_ACCOUNTS_18_21 is not configured"
+            exit 1
+          fi
+
+          if [[ -z "$ANYROUTER_ACCOUNTS_SINGLE" ]]; then
+            echo "ERROR: AGENTROUTER_ACCOUNTS_22 is not configured"
             exit 1
           fi
 
@@ -178,7 +184,35 @@ jobs:
               if any(char.isspace() for char in account["email"]):
                   raise SystemExit("ERROR: whitespace in more account email")
 
-          accounts = base_accounts + extra_accounts + added_accounts + more_accounts
+          single_raw = os.environ.get("ANYROUTER_ACCOUNTS_SINGLE", "")
+          if not single_raw.strip():
+              raise SystemExit("ERROR: AGENTROUTER_ACCOUNTS_22 is not configured")
+          try:
+              single_accounts = json.loads(single_raw)
+          except json.JSONDecodeError:
+              raise SystemExit("ERROR: AGENTROUTER_ACCOUNTS_22 is not valid JSON") from None
+          if not isinstance(single_accounts, list) or len(single_accounts) != 1:
+              raise SystemExit("ERROR: expected exactly 1 single AgentRouter account")
+          single_account = single_accounts[0]
+          if not isinstance(single_account, dict):
+              raise SystemExit("ERROR: single account must be an object")
+          if single_account.get("name") != "agentrouter-22":
+              raise SystemExit("ERROR: single account alias must be agentrouter-22")
+          if single_account.get("provider") != "agentrouter":
+              raise SystemExit("ERROR: invalid single account provider")
+          for key in ("email", "password"):
+              value = single_account.get(key)
+              if not isinstance(value, str) or not value:
+                  raise SystemExit(f"ERROR: missing single account {key}")
+              if not value.strip():
+                  raise SystemExit(f"ERROR: blank single account {key}")
+          email_key = single_account["email"].strip().casefold()
+          if email_key in seen_emails:
+              raise SystemExit("ERROR: duplicate single account email")
+          if any(char.isspace() for char in single_account["email"]):
+              raise SystemExit("ERROR: whitespace in single account email")
+
+          accounts = base_accounts + extra_accounts + added_accounts + more_accounts + single_accounts
           names = []
           for account in accounts:
               if not isinstance(account, dict):
@@ -196,7 +230,7 @@ jobs:
                   print(f"::add-mask::{escaped}")
               names.append(name)
 
-          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 22)]
+          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 23)]
           if names != expected_names:
               raise SystemExit("ERROR: account aliases or order are invalid")
 
@@ -204,7 +238,7 @@ jobs:
           with open(accounts_file, "w", encoding="utf-8") as file:
               json.dump(accounts, file, ensure_ascii=False, separators=(",", ":"))
           os.chmod(accounts_file, 0o600)
-          print("Validated AgentRouter accounts: count=21")
+          print("Validated AgentRouter accounts: count=22")
           PY
 
           export ANYROUTER_ACCOUNTS="$(<"${accounts_file}")"

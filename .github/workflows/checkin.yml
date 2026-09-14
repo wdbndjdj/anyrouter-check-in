@@ -96,6 +96,7 @@ jobs:
         CHECKIN_WAIT_TIMEOUT_MS: 120000
         ANYROUTER_ACCOUNTS: ${{ secrets.ANYROUTER_ACCOUNTS }}
         ANYROUTER_ACCOUNTS_EXTRA_20260913: ${{ secrets.ANYROUTER_ACCOUNTS_EXTRA_20260913 }}
+        ANYROUTER_ACCOUNTS_EXTRA_20260914: ${{ secrets.ANYROUTER_ACCOUNTS_EXTRA_20260914 }}
         PROVIDERS: ${{ secrets.PROVIDERS }}
         DINGDING_WEBHOOK: ${{ secrets.DINGDING_WEBHOOK }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
@@ -121,12 +122,20 @@ jobs:
         import subprocess
         import sys
         
-        extra_key = "ANYROUTER_ACCOUNTS_EXTRA_20260913"
+        extra_keys = [
+            "ANYROUTER_ACCOUNTS_EXTRA_20260913",
+            "ANYROUTER_ACCOUNTS_EXTRA_20260914",
+        ]
         try:
             base = json.loads(os.environ["ANYROUTER_ACCOUNTS"])
-            extra = json.loads(os.environ.get(extra_key) or "[]")
-            if not isinstance(base, list) or not isinstance(extra, list):
+            if not isinstance(base, list):
                 raise ValueError
+            extra = []
+            for extra_key in extra_keys:
+                parsed_extra = json.loads(os.environ.get(extra_key) or "[]")
+                if not isinstance(parsed_extra, list):
+                    raise ValueError
+                extra.extend(parsed_extra)
             if any(not isinstance(a, dict) for a in base + extra):
                 raise ValueError
             for a in extra:
@@ -134,7 +143,7 @@ jobs:
                     raise ValueError
                 if not all(isinstance(a.get(k), str) and a[k] for k in ("email", "password")):
                     raise ValueError
-        except (KeyError, ValueError, TypeError):
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             print("Account configuration invalid; check base/extra Secrets.", file=sys.stderr)
             sys.exit(2)
         
@@ -159,7 +168,8 @@ jobs:
             added += 1
         print(f"Extra accounts: added={added}, skipped={len(extra)-added}", flush=True)
         env = dict(os.environ)
-        env.pop(extra_key, None)
+        for extra_key in extra_keys:
+            env.pop(extra_key, None)
         env["ANYROUTER_ACCOUNTS"] = json.dumps(merged, ensure_ascii=False)
         result = subprocess.run(
             ["xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24", "uv", "run", "checkin.py"],

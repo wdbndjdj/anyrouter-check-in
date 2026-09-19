@@ -111,8 +111,7 @@ jobs:
           fi
 
           if [[ -z "$ANYROUTER_ACCOUNTS_NEXT" ]]; then
-            echo "ERROR: AGENTROUTER_ACCOUNTS_23 is not configured"
-            exit 1
+            echo "NOTICE: AGENTROUTER_ACCOUNTS_23 is not configured; running the 22 configured accounts"
           fi
 
           accounts_file="${RUNNER_TEMP}/agentrouter-accounts.json"
@@ -219,33 +218,36 @@ jobs:
               raise SystemExit("ERROR: whitespace in single account email")
           seen_emails.add(email_key)
 
+          next_accounts = []
           next_raw = os.environ.get("ANYROUTER_ACCOUNTS_NEXT", "")
-          if not next_raw.strip():
-              raise SystemExit("ERROR: AGENTROUTER_ACCOUNTS_23 is not configured")
-          try:
-              next_accounts = json.loads(next_raw)
-          except json.JSONDecodeError:
-              raise SystemExit("ERROR: AGENTROUTER_ACCOUNTS_23 is not valid JSON") from None
-          if not isinstance(next_accounts, list) or len(next_accounts) != 1:
-              raise SystemExit("ERROR: expected exactly 1 next AgentRouter account")
-          next_account = next_accounts[0]
-          if not isinstance(next_account, dict):
-              raise SystemExit("ERROR: next account must be an object")
-          if next_account.get("name") != "agentrouter-23":
-              raise SystemExit("ERROR: next account alias must be agentrouter-23")
-          if next_account.get("provider") != "agentrouter":
-              raise SystemExit("ERROR: invalid next account provider")
-          for key in ("email", "password"):
-              value = next_account.get(key)
-              if not isinstance(value, str) or not value:
-                  raise SystemExit(f"ERROR: missing next account {key}")
-              if not value.strip():
-                  raise SystemExit(f"ERROR: blank next account {key}")
-          email_key = next_account["email"].strip().casefold()
-          if email_key in seen_emails:
-              raise SystemExit("ERROR: duplicate next account email")
-          if any(char.isspace() for char in next_account["email"]):
-              raise SystemExit("ERROR: whitespace in next account email")
+          if next_raw.strip():
+              try:
+                  candidate_accounts = json.loads(next_raw)
+              except json.JSONDecodeError:
+                  raise SystemExit("ERROR: AGENTROUTER_ACCOUNTS_23 is not valid JSON") from None
+              if not isinstance(candidate_accounts, list) or len(candidate_accounts) != 1:
+                  raise SystemExit("ERROR: expected exactly 1 next AgentRouter account")
+              next_account = candidate_accounts[0]
+              if not isinstance(next_account, dict):
+                  raise SystemExit("ERROR: next account must be an object")
+              if next_account.get("name") != "agentrouter-23":
+                  raise SystemExit("ERROR: next account alias must be agentrouter-23")
+              if next_account.get("provider") != "agentrouter":
+                  raise SystemExit("ERROR: invalid next account provider")
+              for key in ("email", "password"):
+                  value = next_account.get(key)
+                  if not isinstance(value, str) or not value:
+                      raise SystemExit(f"ERROR: missing next account {key}")
+                  if not value.strip():
+                      raise SystemExit(f"ERROR: blank next account {key}")
+              email_key = next_account["email"].strip().casefold()
+              if email_key in seen_emails:
+                  print("WARNING: duplicate next account email; skipping agentrouter-23")
+              else:
+                  if any(char.isspace() for char in next_account["email"]):
+                      raise SystemExit("ERROR: whitespace in next account email")
+                  seen_emails.add(email_key)
+                  next_accounts = [next_account]
 
           accounts = base_accounts + extra_accounts + added_accounts + more_accounts + single_accounts + next_accounts
           names = []
@@ -265,7 +267,9 @@ jobs:
                   print(f"::add-mask::{escaped}")
               names.append(name)
 
-          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 24)]
+          expected_names = [f"agentrouter-{index:02d}" for index in range(1, 23)]
+          if next_accounts:
+              expected_names.append("agentrouter-23")
           if names != expected_names:
               raise SystemExit("ERROR: account aliases or order are invalid")
 
@@ -273,7 +277,7 @@ jobs:
           with open(accounts_file, "w", encoding="utf-8") as file:
               json.dump(accounts, file, ensure_ascii=False, separators=(",", ":"))
           os.chmod(accounts_file, 0o600)
-          print("Validated AgentRouter accounts: count=23")
+          print(f"Validated AgentRouter accounts: count={len(accounts)}")
           PY
 
           export ANYROUTER_ACCOUNTS="$(<"${accounts_file}")"

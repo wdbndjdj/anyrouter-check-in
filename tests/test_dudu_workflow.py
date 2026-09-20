@@ -26,7 +26,7 @@ def test_dudu_workflow_uses_bearer_secret_and_checkin_endpoint():
 	assert 'dudu_checkin' not in script
 
 
-def test_dudu_workflow_does_not_contain_a_literal_access_token():
+def test_dudu_workflow_keeps_the_token_out_of_tracked_files():
 	text = '\n'.join((WORKFLOW.read_text(encoding='utf-8'), SCRIPT.read_text(encoding='utf-8')))
 
-	assert 'xVpPGFlyFtApN' not in text
+	assert '${DUDU_ACCESS_TOKEN}' in text

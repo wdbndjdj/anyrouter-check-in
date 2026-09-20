@@ -1,0 +1,22 @@
+name: dudu 公益站自动签到
+
+on:
+  # GitHub Actions uses UTC. This runs at 08:10 Asia/Shanghai every day.
+  schedule:
+    - cron: '10 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      DUDU_ACCESS_TOKEN: ${{ secrets.DUDU_ACCESS_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 执行 dudu 签到
+        run: bash scripts/dudu_checkin.sh

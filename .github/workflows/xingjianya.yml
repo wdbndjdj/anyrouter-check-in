@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      proxy_validation_only:
+        description: 只比较代理节点，不执行签到
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   checkin:
@@ -64,12 +69,16 @@ jobs:
       - name: 配置星见雅代理
         env:
           PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
-          PROXY_TEST_URL: https://www.gstatic.com/generate_204
+          PROXY_TEST_URL: https://new.xinjianya.top/api/status
+          PROXY_TEST_MODE: status_json
+          PROXY_EXTRA_TEST_URL: https://new.xinjianya.top/login
+          PROXY_EXTRA_TEST_MODE: login_page
           MIHOMO_VERSION: v1.19.27
           PROXY_REQUIRED: true
         run: bash scripts/setup_mihomo_proxy.sh
 
       - name: 执行星见雅签到
+        if: ${{ github.event.inputs.proxy_validation_only != 'true' }}
         env:
           ANYROUTER_ACCOUNTS: ${{ secrets.XINGJIANYA_ACCOUNT }}
           PROVIDERS: >-
@@ -98,4 +107,3 @@ jobs:
       - name: 停止代理
         if: always()
         run: bash scripts/stop_mihomo_proxy.sh
-

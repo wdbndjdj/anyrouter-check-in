@@ -1,43 +1,92 @@
 #!/usr/bin/env bash
-# 通过 mihomo 拉取订阅、启动本地代理并探测可用节点。
-# 环境变量:
-#   PROXY_SUBSCRIPTION_URL  订阅链接（必填才启用）
-#   PROXY_TEST_URL          探测目标，默认 https://www.google.com/generate_204
-#   PROXY_REQUIRED          true 时探测失败则退出 1
-#   PROXY_PORT              本地 mixed-port，默认 7890
+# Fetch a subscription privately, restrict it to the two approved VMess nodes,
+# and select the fastest candidate that passes repeated project probes.
 
 set -euo pipefail
+umask 077
 
-if [[ -z "${PROXY_SUBSCRIPTION_URL:-}" ]]; then
-	echo "[INFO] PROXY_SUBSCRIPTION_URL not set, skip proxy setup"
-	exit 0
-fi
-
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROXY_DIR="${RUNNER_TEMP:-/tmp}/checkin-proxy"
 PROXY_PORT="${PROXY_PORT:-7890}"
+PROXY_CONTROLLER_PORT="${PROXY_CONTROLLER_PORT:-9091}"
 PROXY_TEST_URL="${PROXY_TEST_URL:-https://www.google.com/generate_204}"
-MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.0}"
+PROXY_TEST_MODE="${PROXY_TEST_MODE:-http_2xx}"
+PROXY_EXTRA_TEST_URL="${PROXY_EXTRA_TEST_URL:-}"
+PROXY_EXTRA_TEST_MODE="${PROXY_EXTRA_TEST_MODE:-http_2xx}"
+PROXY_CANDIDATE_TIMEOUT="${PROXY_CANDIDATE_TIMEOUT:-12}"
+PROXY_VALIDATION_ROUNDS="${PROXY_VALIDATION_ROUNDS:-5}"
+PROXY_NODE_FILTER="${PROXY_NODE_FILTER:-^RN-CF-(香港|洛杉矶)入口$}"
+MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.27}"
 PROXY_REQUIRED="${PROXY_REQUIRED:-false}"
+CONTROLLER_URL="http://127.0.0.1:${PROXY_CONTROLLER_PORT}"
+PROXY_URL="http://127.0.0.1:${PROXY_PORT}"
 
-mkdir -p "${PROXY_DIR}"
-cd "${PROXY_DIR}"
+cleanup_proxy() {
+	if [[ -f "${PROXY_DIR}/mihomo.pid" ]]; then
+		kill "$(cat "${PROXY_DIR}/mihomo.pid")" 2>/dev/null || true
+		rm -f "${PROXY_DIR}/mihomo.pid"
+	fi
+	rm -f "${PROXY_DIR}/config.yaml" "${PROXY_DIR}/subscription.yaml" \
+		"${PROXY_DIR}/subscription-download.err" "${PROXY_DIR}/provider.json" \
+		"${PROXY_DIR}/probe-results.json" "${PROXY_DIR}/selected.json" \
+		"${PROXY_DIR}/select.json" "${PROXY_DIR}"/probe-*.body \
+		"${PROXY_DIR}/mihomo.log" \
+		"${PROXY_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}" \
+		"${PROXY_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}.gz"
+}
 
-echo "[INFO] Downloading mihomo ${MIHOMO_VERSION}..."
-ARCHIVE="mihomo-linux-amd64-${MIHOMO_VERSION}.gz"
-if ! curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL -o "${ARCHIVE}" \
-	"https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${ARCHIVE}"; then
-	echo "[WARN] Failed to download mihomo ${MIHOMO_VERSION}, skip proxy setup"
+fail_or_skip() {
+	echo "[FAILED] $1"
+	cleanup_proxy
 	if [[ "${PROXY_REQUIRED}" == "true" ]]; then
 		exit 1
 	fi
+	echo "[INFO] Proxy is optional for this workflow; no proxy endpoint was exported"
+	exit 0
+}
+
+if [[ -z "${PROXY_SUBSCRIPTION_URL:-}" ]]; then
+	if [[ "${PROXY_REQUIRED}" == "true" ]]; then
+		fail_or_skip "PROXY_SUBSCRIPTION_URL is required but not configured"
+	fi
+	echo "[INFO] PROXY_SUBSCRIPTION_URL not set; skip proxy setup"
 	exit 0
 fi
+
+if ! [[ "${PROXY_VALIDATION_ROUNDS}" =~ ^[1-9][0-9]*$ ]] || (( PROXY_VALIDATION_ROUNDS > 10 )); then
+	fail_or_skip "PROXY_VALIDATION_ROUNDS must be an integer from 1 to 10"
+fi
+
+mkdir -p -m 700 "${PROXY_DIR}"
+chmod 700 "${PROXY_DIR}"
+cd "${PROXY_DIR}"
+
+echo "[INFO] Downloading Mihomo ${MIHOMO_VERSION}..."
+ARCHIVE="mihomo-linux-amd64-${MIHOMO_VERSION}.gz"
+if ! curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL -o "${ARCHIVE}" \
+	"https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${ARCHIVE}"; then
+	fail_or_skip "Failed to download Mihomo ${MIHOMO_VERSION}"
+fi
 gunzip -f "${ARCHIVE}"
-chmod +x "mihomo-linux-amd64-${MIHOMO_VERSION}"
+chmod 700 "mihomo-linux-amd64-${MIHOMO_VERSION}"
 MIHOMO_BIN="${PROXY_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}"
+
+echo "[INFO] Downloading proxy subscription with Mihomo-compatible headers..."
+if ! curl --retry 3 --retry-delay 3 --retry-all-errors -fsSL --compressed \
+	--max-time 60 \
+	-H "User-Agent: mihomo/${MIHOMO_VERSION#v}" \
+	-H 'Accept: application/yaml, text/yaml, */*' \
+	-o subscription.yaml "${PROXY_SUBSCRIPTION_URL}" 2>subscription-download.err; then
+	rm -f subscription.yaml
+	fail_or_skip "Failed to download proxy subscription"
+fi
+chmod 600 subscription.yaml
+rm -f subscription-download.err
 
 cat > config.yaml <<EOF
 mixed-port: ${PROXY_PORT}
+external-controller: 127.0.0.1:${PROXY_CONTROLLER_PORT}
 allow-lan: false
 ipv6: false
 mode: rule
@@ -46,58 +95,107 @@ unified-delay: true
 
 proxy-providers:
   subscription:
-    type: http
-    url: "${PROXY_SUBSCRIPTION_URL}"
-    interval: 3600
+    type: file
     path: ./subscription.yaml
-    health-check:
-      enable: true
-      interval: 300
-      url: https://www.gstatic.com/generate_204
+    interval: 3600
+    filter: "${PROXY_NODE_FILTER}"
 
 proxy-groups:
   - name: CHECKIN
-    type: url-test
-    url: "${PROXY_TEST_URL}"
-    interval: 300
-    tolerance: 150
-    lazy: false
+    type: select
     use:
       - subscription
 
 rules:
   - MATCH,CHECKIN
 EOF
+chmod 600 config.yaml
 
-echo "[INFO] Starting mihomo on 127.0.0.1:${PROXY_PORT}..."
+echo "[INFO] Validating Mihomo configuration..."
+if ! "${MIHOMO_BIN}" -t -d "${PROXY_DIR}" -f config.yaml >/dev/null 2>&1; then
+	fail_or_skip "Mihomo rejected the generated configuration or subscription"
+fi
+
+echo "[INFO] Starting Mihomo on 127.0.0.1:${PROXY_PORT}..."
 nohup "${MIHOMO_BIN}" -d "${PROXY_DIR}" -f config.yaml > mihomo.log 2>&1 &
 echo $! > mihomo.pid
+chmod 600 mihomo.pid mihomo.log
 
-PROXY_URL="http://127.0.0.1:${PROXY_PORT}"
-READY=false
-for attempt in $(seq 1 45); do
-	if curl -fsS -x "${PROXY_URL}" --max-time 20 "${PROXY_TEST_URL}" -o /dev/null 2>/dev/null; then
-		READY=true
+PROVIDER_JSON="${PROXY_DIR}/provider.json"
+PROVIDER_READY=false
+for attempt in $(seq 1 30); do
+	if curl -fsS --max-time 3 "${CONTROLLER_URL}/providers/proxies/subscription" -o "${PROVIDER_JSON}" && \
+		PYTHONPATH="${REPO_ROOT}" python3 - "${PROVIDER_JSON}" <<'PY'
+import json
+import sys
+
+from utils.proxy_selection import filter_vmess_candidates
+
+with open(sys.argv[1], encoding='utf-8') as handle:
+	filter_vmess_candidates(json.load(handle))
+PY
+	then
+		PROVIDER_READY=true
 		break
 	fi
-	echo "[INFO] Waiting for proxy health check (${attempt}/45)..."
+	echo "[INFO] Waiting for the filtered two-node VMess provider (${attempt}/30)..."
 	sleep 2
 done
 
-if [[ "${READY}" != "true" ]]; then
-	echo "[FAILED] Proxy health check failed for ${PROXY_TEST_URL}"
-	tail -n 30 mihomo.log || true
-	if [[ -f mihomo.pid ]]; then
-		kill "$(cat mihomo.pid)" 2>/dev/null || true
-	fi
-	if [[ "${PROXY_REQUIRED}" == "true" ]]; then
-		exit 1
-	fi
-	exit 0
+if [[ "${PROVIDER_READY}" != "true" ]]; then
+	fail_or_skip "The subscription did not load exactly the two approved VMess candidates"
+fi
+chmod 600 "${PROVIDER_JSON}"
+
+echo "[INFO] Comparing the two VMess candidates with ${PROXY_VALIDATION_ROUNDS} repeated endpoint probes..."
+if ! PYTHONPATH="${REPO_ROOT}" python3 "${SCRIPT_DIR}/probe_proxy_candidates.py" \
+	"${PROVIDER_JSON}" "${CONTROLLER_URL}" "${PROXY_URL}" \
+	"${PROXY_VALIDATION_ROUNDS}" "${PROXY_CANDIDATE_TIMEOUT}" \
+	> "${PROXY_DIR}/probe-results.json"; then
+	fail_or_skip "No VMess candidate passed every repeated project endpoint check"
+fi
+chmod 600 "${PROXY_DIR}/probe-results.json"
+
+WINNER="$(python3 - "${PROXY_DIR}/probe-results.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as handle:
+	print(json.load(handle)['name'])
+PY
+)"
+MEDIAN_MS="$(python3 - "${PROXY_DIR}/probe-results.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as handle:
+	print(json.load(handle)['median_ms'])
+PY
+)"
+JITTER_MS="$(python3 - "${PROXY_DIR}/probe-results.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as handle:
+	print(json.load(handle)['jitter_ms'])
+PY
+)"
+
+python3 - "${WINNER}" > "${PROXY_DIR}/select.json" <<'PY'
+import json
+import sys
+
+print(json.dumps({'name': sys.argv[1]}, ensure_ascii=False))
+PY
+if ! curl -fsS --max-time 5 -X PUT -H 'Content-Type: application/json' \
+	--data-binary @"${PROXY_DIR}/select.json" \
+	"${CONTROLLER_URL}/proxies/CHECKIN" -o /dev/null; then
+	fail_or_skip "Could not select the winning VMess candidate"
 fi
 
+echo "[SUCCESS] Selected ${WINNER} (median=${MEDIAN_MS}ms, jitter=${JITTER_MS}ms; ${PROXY_VALIDATION_ROUNDS}/${PROXY_VALIDATION_ROUNDS} rounds passed)"
 echo "[SUCCESS] Proxy is ready: ${PROXY_URL}"
 echo "[INFO] Proxy is scoped to CHECKIN_PROXY_URL (browser/python only, not global HTTP_PROXY)"
 if [[ -n "${GITHUB_ENV:-}" ]]; then
-	echo "CHECKIN_PROXY_URL=${PROXY_URL}" >> "${GITHUB_ENV}"
+	printf 'CHECKIN_PROXY_URL=%s\n' "${PROXY_URL}" >> "${GITHUB_ENV}"
 fi

@@ -10,11 +10,6 @@ on:
         required: false
         default: false
         type: boolean
-      proxy_validation_only:
-        description: 只比较代理节点，不执行签到
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   checkin:
@@ -70,13 +65,11 @@ jobs:
         env:
           PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
           PROXY_TEST_URL: https://www.gstatic.com/generate_204
-          PROXY_TEST_MODE: http_2xx
           MIHOMO_VERSION: v1.19.27
           PROXY_REQUIRED: true
-        run: bash scripts/setup_checkin_proxy.sh
+        run: bash scripts/setup_mihomo_proxy.sh
 
       - name: 执行星见雅签到
-        if: ${{ github.event.inputs.proxy_validation_only != 'true' }}
         env:
           ANYROUTER_ACCOUNTS: ${{ secrets.XINGJIANYA_ACCOUNT }}
           PROVIDERS: >-
@@ -104,4 +97,4 @@ jobs:
 
       - name: 停止代理
         if: always()
-        run: bash scripts/stop_checkin_proxy.sh
+        run: bash scripts/stop_mihomo_proxy.sh

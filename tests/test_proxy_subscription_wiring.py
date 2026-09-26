@@ -23,13 +23,6 @@ TARGET_WORKFLOWS = {
 		'required': 'github.event.inputs.proxy_validation_only',
 		'signin_step': '执行 SeekAI 签到',
 	},
-	'.github/workflows/xingjianya.yml': {
-		'test_url': 'https://www.gstatic.com/generate_204',
-		'test_mode': 'http_2xx',
-		'required': 'true',
-		'signin_step': '执行星见雅签到',
-		'proxy_step': '配置星见雅代理',
-	},
 }
 
 

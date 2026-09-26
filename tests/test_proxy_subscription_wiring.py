@@ -77,7 +77,7 @@ def test_proxy_workflow_uses_shared_secret_and_project_probe(
 	assert 'run: bash scripts/stop_mihomo_proxy.sh' in stop_step
 
 
-def test_common_mihomo_provider_fetches_only_the_injected_subscription_url():
+def test_common_mihomo_provider_fetches_subscription_and_filters_candidates_in_code():
 	script = (ROOT / 'scripts' / 'setup_mihomo_proxy.sh').read_text(encoding='utf-8')
 	config_start = script.index('cat > config.yaml <<EOF')
 	config_end = script.index('\nEOF', config_start)
@@ -89,7 +89,8 @@ def test_common_mihomo_provider_fetches_only_the_injected_subscription_url():
 	assert 'Accept: application/yaml, text/yaml, */*' in script
 	assert 'type: file' in provider_config
 	assert 'path: ./subscription.yaml' in provider_config
-	assert 'filter: "${PROXY_NODE_FILTER}"' in provider_config
+	assert 'filter:' not in provider_config
+	assert 'filter_vmess_candidates' in script
 	assert 'type: http' not in provider_config
 	assert 'PROXY_VALIDATION_ROUNDS="${PROXY_VALIDATION_ROUNDS:-5}"' in script
 	assert re.search(r'(?m)^\s*if \[\[ -z \"\$\{PROXY_SUBSCRIPTION_URL:-\}\" \]\]', script)

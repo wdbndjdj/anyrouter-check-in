@@ -16,7 +16,6 @@ PROXY_EXTRA_TEST_URL="${PROXY_EXTRA_TEST_URL:-}"
 PROXY_EXTRA_TEST_MODE="${PROXY_EXTRA_TEST_MODE:-http_2xx}"
 PROXY_CANDIDATE_TIMEOUT="${PROXY_CANDIDATE_TIMEOUT:-12}"
 PROXY_VALIDATION_ROUNDS="${PROXY_VALIDATION_ROUNDS:-5}"
-PROXY_NODE_FILTER="${PROXY_NODE_FILTER:-^RN-CF-(香港|洛杉矶)入口$}"
 MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.27}"
 PROXY_REQUIRED="${PROXY_REQUIRED:-false}"
 CONTROLLER_URL="http://127.0.0.1:${PROXY_CONTROLLER_PORT}"
@@ -98,7 +97,6 @@ proxy-providers:
     type: file
     path: ./subscription.yaml
     interval: 3600
-    filter: "${PROXY_NODE_FILTER}"
 
 proxy-groups:
   - name: CHECKIN
@@ -125,27 +123,70 @@ PROVIDER_JSON="${PROXY_DIR}/provider.json"
 PROVIDER_READY=false
 for attempt in $(seq 1 30); do
 	if curl -fsS --max-time 3 "${CONTROLLER_URL}/providers/proxies/subscription" -o "${PROVIDER_JSON}" && \
-		PYTHONPATH="${REPO_ROOT}" python3 - "${PROVIDER_JSON}" <<'PY'
+		python3 - "${PROVIDER_JSON}" >/dev/null 2>&1 <<'PY'
 import json
 import sys
 
-from utils.proxy_selection import filter_vmess_candidates
-
-with open(sys.argv[1], encoding='utf-8') as handle:
-	filter_vmess_candidates(json.load(handle))
+try:
+    with open(sys.argv[1], encoding='utf-8') as handle:
+        proxies = json.load(handle).get('proxies')
+except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(proxies, list) and proxies else 1)
 PY
 	then
 		PROVIDER_READY=true
 		break
 	fi
-	echo "[INFO] Waiting for the filtered two-node VMess provider (${attempt}/30)..."
+	echo "[INFO] Waiting for subscription provider nodes (${attempt}/30)..."
 	sleep 2
 done
 
 if [[ "${PROVIDER_READY}" != "true" ]]; then
-	fail_or_skip "The subscription did not load exactly the two approved VMess candidates"
+	fail_or_skip "The subscription provider did not load any proxy nodes"
 fi
 chmod 600 "${PROVIDER_JSON}"
+
+if ! PYTHONPATH="${REPO_ROOT}" python3 - "${PROVIDER_JSON}" <<'PY'
+import json
+import sys
+from collections.abc import Mapping
+
+from utils.proxy_selection import ALLOWED_PROXY_NAMES, filter_vmess_candidates
+
+try:
+    with open(sys.argv[1], encoding='utf-8') as handle:
+        payload = json.load(handle)
+    proxies = payload.get('proxies', [])
+    if not isinstance(proxies, list):
+        raise ValueError('Mihomo provider response has no proxy list')
+    allowed = {
+        proxy.get('name')
+        for proxy in proxies
+        if isinstance(proxy, Mapping)
+        and isinstance(proxy.get('name'), str)
+        and proxy.get('name') in ALLOWED_PROXY_NAMES
+    }
+    vmess = {
+        proxy.get('name')
+        for proxy in proxies
+        if isinstance(proxy, Mapping)
+        and isinstance(proxy.get('name'), str)
+        and proxy.get('name') in ALLOWED_PROXY_NAMES
+        and str(proxy.get('type', '')).casefold() == 'vmess'
+    }
+    print(
+        f'[INFO] Provider loaded {len(proxies)} nodes; '
+        f'approved labels={len(allowed)}/2, VMess matches={len(vmess)}/2'
+    )
+    filter_vmess_candidates(payload)
+except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    print(f'[FAILED] Approved VMess candidates are unavailable: {exc}')
+    raise SystemExit(1)
+PY
+then
+	fail_or_skip "The loaded subscription does not contain both approved VMess candidates"
+fi
 
 echo "[INFO] Comparing the two VMess candidates with ${PROXY_VALIDATION_ROUNDS} repeated endpoint probes..."
 if ! PYTHONPATH="${REPO_ROOT}" python3 "${SCRIPT_DIR}/probe_proxy_candidates.py" \

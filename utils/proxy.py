@@ -6,13 +6,11 @@ import os
 
 
 def get_proxy_server(*, use_proxy: bool = True) -> str | None:
-	"""Read CHECKIN_PROXY_URL and fail closed when a provider requires it."""
+	"""按平台配置读取 CHECKIN_PROXY_URL；use_proxy=False 时不返回代理地址。"""
 	if not use_proxy:
 		return None
 	server = os.getenv('CHECKIN_PROXY_URL', '').strip()
-	if not server:
-		raise RuntimeError('Provider requires proxy but CHECKIN_PROXY_URL is not set')
-	return server
+	return server or None
 
 
 def get_playwright_proxy(*, use_proxy: bool = True) -> dict[str, str] | None:

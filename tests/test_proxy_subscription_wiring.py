@@ -1,48 +1,14 @@
 import re
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).parents[1]
-WORKFLOW_PROXIES = (
-	(
-		'.github/workflows/checkin.yml',
-		'配置代理',
-		'scripts/setup_mihomo_proxy.sh',
-		'https://anyrouter.top/api/status',
-		'https://anyrouter.top/login',
-	),
-	(
-		'.github/workflows/agentrouter.yml',
-		'配置代理',
-		'scripts/setup_agentrouter_proxy.sh',
-		'https://agentrouter.org/api/status',
-		'https://agentrouter.org/login',
-	),
-	(
-		'.github/workflows/seekai.yml',
-		'配置代理',
-		'scripts/setup_mihomo_proxy.sh',
-		'https://seekai.cc/api/status',
-		'https://seekai.cc/profile',
-	),
-	(
-		'.github/workflows/xingjianya.yml',
-		'配置星见雅代理',
-		'scripts/setup_mihomo_proxy.sh',
-		'https://new.xinjianya.top/api/status',
-		'https://new.xinjianya.top/login',
-	),
-)
+TARGET_WORKFLOW = '.github/workflows/checkin.yml'
 
 
 def _step_block(workflow_text: str, step_name: str) -> str:
 	lines = workflow_text.splitlines()
 	marker = f'- name: {step_name}'
-	start = next(
-		(index for index, line in enumerate(lines) if line.strip() == marker),
-		None,
-	)
+	start = next((index for index, line in enumerate(lines) if line.strip() == marker), None)
 	assert start is not None, f'missing workflow step: {step_name}'
 	indent = len(lines[start]) - len(lines[start].lstrip())
 	end = next(
@@ -56,29 +22,23 @@ def _step_block(workflow_text: str, step_name: str) -> str:
 	return '\n'.join(lines[start:end])
 
 
-@pytest.mark.parametrize(
-	'workflow_path,step_name,setup_script,test_url,login_url',
-	WORKFLOW_PROXIES,
-)
-def test_proxy_workflow_uses_shared_secret_and_project_probe(
-	workflow_path, step_name, setup_script, test_url, login_url
-):
-	workflow_text = (ROOT / workflow_path).read_text(encoding='utf-8')
-	proxy_step = _step_block(workflow_text, step_name)
+def test_target_proxy_workflow_uses_existing_subscription_and_probe():
+	workflow_text = (ROOT / TARGET_WORKFLOW).read_text(encoding='utf-8')
+	proxy_step = _step_block(workflow_text, '配置代理')
 
 	assert 'PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}' in proxy_step
-	assert f'PROXY_TEST_URL: {test_url}' in proxy_step
-	assert f'PROXY_EXTRA_TEST_URL: {login_url}' in proxy_step
+	assert 'PROXY_TEST_URL: https://anyrouter.top/api/status' in proxy_step
+	assert 'PROXY_EXTRA_TEST_URL: https://anyrouter.top/login' in proxy_step
 	assert 'PROXY_EXTRA_TEST_MODE: login_page' in proxy_step
-	assert f'run: bash {setup_script}' in proxy_step
+	assert 'run: bash scripts/setup_checkin_proxy.sh' in proxy_step
 
 	stop_step = _step_block(workflow_text, '停止代理')
 	assert 'if: always()' in stop_step
-	assert 'run: bash scripts/stop_mihomo_proxy.sh' in stop_step
+	assert 'run: bash scripts/stop_checkin_proxy.sh' in stop_step
 
 
-def test_common_mihomo_provider_fetches_subscription_and_filters_candidates_in_code():
-	script = (ROOT / 'scripts' / 'setup_mihomo_proxy.sh').read_text(encoding='utf-8')
+def test_target_setup_selects_only_the_approved_nodes():
+	script = (ROOT / 'scripts' / 'setup_checkin_proxy.sh').read_text(encoding='utf-8')
 	config_start = script.index('cat > config.yaml <<EOF')
 	config_end = script.index('\nEOF', config_start)
 	provider_config = script[config_start:config_end]
@@ -93,35 +53,50 @@ def test_common_mihomo_provider_fetches_subscription_and_filters_candidates_in_c
 	assert 'filter_vmess_candidates' in script
 	assert 'type: http' not in provider_config
 	assert 'PROXY_VALIDATION_ROUNDS="${PROXY_VALIDATION_ROUNDS:-5}"' in script
-	assert re.search(r'(?m)^\s*if \[\[ -z \"\$\{PROXY_SUBSCRIPTION_URL:-\}\" \]\]', script)
+	assert re.search(r'(?m)^\s*if \[\[ -z "\$\{PROXY_SUBSCRIPTION_URL:-\}" \]\]', script)
 
 
-def test_agentrouter_setup_downloads_shared_subscription_and_filters_candidate_nodes():
-	script = (ROOT / 'scripts' / 'setup_agentrouter_proxy.sh').read_text(encoding='utf-8')
+def test_agentrouter_keeps_its_preexisting_dedicated_proxy_configuration():
+	workflow_text = (ROOT / '.github/workflows/agentrouter.yml').read_text(encoding='utf-8')
+	proxy_step = _step_block(workflow_text, '配置代理')
 
-	assert 'setup_mihomo_proxy.sh' in script
-	assert 'https://agentrouter.org/api/status' in script
-	assert ':-status_json' in script
-	assert 'https://agentrouter.org/login' in script
-	assert ':-login_page' in script
-	assert 'PROXY_NODE_URI' not in script
+	assert 'PROXY_NODE_URI: ${{ secrets.AGENTROUTER_PROXY_NODE_URI }}' in proxy_step
+	assert 'PROXY_SUBSCRIPTION_URL:' not in proxy_step
+	assert 'proxy_validation_only:' not in workflow_text
 
 
-def test_proxy_subscription_values_are_not_embedded_in_workflow_files():
-	for workflow_path, step_name, *_ in WORKFLOW_PROXIES:
+def test_other_workflows_do_not_get_new_proxy_validation_or_project_probes():
+	for workflow_path in (
+		'.github/workflows/agentrouter.yml',
+		'.github/workflows/seekai.yml',
+		'.github/workflows/xingjianya.yml',
+	):
 		workflow_text = (ROOT / workflow_path).read_text(encoding='utf-8')
-		proxy_step = _step_block(workflow_text, step_name)
+		assert 'proxy_validation_only:' not in workflow_text
+		assert 'PROXY_EXTRA_TEST_URL:' not in workflow_text
 
-		assert '${{ secrets.PROXY_SUBSCRIPTION_URL }}' in proxy_step
-		assert not re.search(r'(?m)^\s*PROXY_SUBSCRIPTION_URL:\s*https?://', proxy_step)
+	seekai = (ROOT / '.github/workflows/seekai.yml').read_text(encoding='utf-8')
+	assert "SEEKAI_USE_PROXY: ${{ secrets.SEEKAI_USE_PROXY || 'false' }}" in seekai
+	assert 'PROXY_REQUIRED: false' in seekai
 
 
-@pytest.mark.parametrize(
-	'workflow_path',
-	[workflow_path for workflow_path, *_ in WORKFLOW_PROXIES],
-)
-def test_workflows_expose_a_proxy_only_validation_dispatch(workflow_path):
-	workflow_text = (ROOT / workflow_path).read_text(encoding='utf-8')
+def test_proxy_subscription_values_are_not_embedded_in_target_workflow():
+	workflow_text = (ROOT / TARGET_WORKFLOW).read_text(encoding='utf-8')
+	proxy_step = _step_block(workflow_text, '配置代理')
 
-	assert 'proxy_validation_only:' in workflow_text
-	assert "github.event.inputs.proxy_validation_only != 'true'" in workflow_text
+	assert '${{ secrets.PROXY_SUBSCRIPTION_URL }}' in proxy_step
+	assert not re.search(r'(?m)^\s*PROXY_SUBSCRIPTION_URL:\s*https?://', proxy_step)
+
+
+def test_only_target_workflow_exposes_proxy_only_validation_dispatch():
+	target = (ROOT / TARGET_WORKFLOW).read_text(encoding='utf-8')
+	assert 'proxy_validation_only:' in target
+	assert "github.event.inputs.proxy_validation_only != 'true'" in target
+
+	for workflow_path in (
+		'.github/workflows/agentrouter.yml',
+		'.github/workflows/seekai.yml',
+		'.github/workflows/xingjianya.yml',
+	):
+		workflow_text = (ROOT / workflow_path).read_text(encoding='utf-8')
+		assert 'proxy_validation_only:' not in workflow_text

@@ -11,11 +11,6 @@ on:
         required: false
         default: false
         type: boolean
-      proxy_validation_only:
-        description: 只比较代理节点，不执行签到
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   checkin:
@@ -78,15 +73,11 @@ jobs:
         env:
           PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
           PROXY_TEST_URL: https://seekai.cc/api/status
-          PROXY_TEST_MODE: status_json
-          PROXY_EXTRA_TEST_URL: https://seekai.cc/profile
-          PROXY_EXTRA_TEST_MODE: login_page
           MIHOMO_VERSION: v1.19.27
-          PROXY_REQUIRED: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.proxy_validation_only == 'true' && 'true' || 'false' }}
+          PROXY_REQUIRED: false
         run: bash scripts/setup_mihomo_proxy.sh
 
       - name: 执行 SeekAI 签到
-        if: ${{ github.event.inputs.proxy_validation_only != 'true' }}
         env:
           SEEKAI_ACCOUNT: ${{ secrets.SEEKAI_ACCOUNT }}
           SEEKAI_ACCOUNTS: ${{ secrets.SEEKAI_ACCOUNTS }}

@@ -13,8 +13,16 @@ fi
 rm -f \
 	"${PROXY_DIR}/agentrouter-node.txt" \
 	"${PROXY_DIR}/config.yaml" \
+	"${PROXY_DIR}/subscription.yaml" \
+	"${PROXY_DIR}/subscription-download.err" \
 	"${PROXY_DIR}/select.json" \
 	"${PROXY_DIR}/provider.json" \
 	"${PROXY_DIR}/candidates.tsv" \
+	"${PROXY_DIR}/probe-results.json" \
+	"${PROXY_DIR}/selected.json" \
+	"${PROXY_DIR}"/probe-*.body \
 	"${PROXY_DIR}"/status-*.json \
-	"${PROXY_DIR}"/login-*.html
+	"${PROXY_DIR}"/login-*.html \
+	"${PROXY_DIR}/mihomo.log" \
+	"${PROXY_DIR}/mihomo-linux-amd64-*.gz" \
+	"${PROXY_DIR}/mihomo-linux-amd64-v*"

@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      proxy_validation_only:
+        description: 只比较代理节点，不执行签到
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   checkin:
@@ -63,16 +68,17 @@ jobs:
 
       - name: 配置代理
         env:
-          PROXY_NODE_URI: ${{ secrets.AGENTROUTER_PROXY_NODE_URI }}
-          PROXY_TEST_URL: https://agentrouter.org/login
-          PROXY_STATUS_URL: https://agentrouter.org/api/status
+          PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+          PROXY_TEST_URL: https://agentrouter.org/api/status
+          PROXY_TEST_MODE: status_json
+          PROXY_EXTRA_TEST_URL: https://agentrouter.org/login
+          PROXY_EXTRA_TEST_MODE: login_page
           MIHOMO_VERSION: v1.19.27
           PROXY_REQUIRED: true
-          PROXY_MAX_CANDIDATES: 160
-          PROXY_CANDIDATE_TIMEOUT: 12
-        run: bash scripts/setup_agentrouter_proxy.sh
+        run: bash scripts/setup_checkin_proxy.sh
 
       - name: 执行 AgentRouter 签到
+        if: ${{ github.event.inputs.proxy_validation_only != 'true' }}
         env:
           ANYROUTER_ACCOUNTS_BASE: ${{ secrets.AGENTROUTER_ACCOUNTS_V2 }}
           ANYROUTER_ACCOUNTS_EXTRA: ${{ secrets.AGENTROUTER_ACCOUNTS_EXTRA }}
@@ -295,4 +301,4 @@ jobs:
 
       - name: 停止代理
         if: always()
-        run: bash scripts/stop_mihomo_proxy.sh
+        run: bash scripts/stop_checkin_proxy.sh

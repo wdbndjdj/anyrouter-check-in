@@ -24,8 +24,8 @@ TARGET_WORKFLOWS = {
 		'signin_step': '执行 SeekAI 签到',
 	},
 	'.github/workflows/xingjianya.yml': {
-		'test_url': 'https://new.xinjianya.top/api/status',
-		'extra_url': 'https://new.xinjianya.top/login',
+		'test_url': 'https://www.gstatic.com/generate_204',
+		'test_mode': 'http_2xx',
 		'required': 'true',
 		'signin_step': '执行星见雅签到',
 		'proxy_step': '配置星见雅代理',
@@ -57,9 +57,12 @@ def test_every_preexisting_proxy_workflow_uses_the_scoped_vmess_selector(workflo
 
 	assert 'PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}' in proxy_step
 	assert f'PROXY_TEST_URL: {expected["test_url"]}' in proxy_step
-	assert 'PROXY_TEST_MODE: status_json' in proxy_step
-	assert f'PROXY_EXTRA_TEST_URL: {expected["extra_url"]}' in proxy_step
-	assert 'PROXY_EXTRA_TEST_MODE: login_page' in proxy_step
+	assert f'PROXY_TEST_MODE: {expected.get("test_mode", "status_json")}' in proxy_step
+	if 'extra_url' in expected:
+		assert f'PROXY_EXTRA_TEST_URL: {expected["extra_url"]}' in proxy_step
+		assert 'PROXY_EXTRA_TEST_MODE: login_page' in proxy_step
+	else:
+		assert 'PROXY_EXTRA_TEST_URL:' not in proxy_step
 	assert 'run: bash scripts/setup_checkin_proxy.sh' in proxy_step
 	assert expected['required'] in proxy_step
 

@@ -27,8 +27,8 @@ def test_target_proxy_workflow_uses_existing_subscription_and_probe():
 	proxy_step = _step_block(workflow_text, '配置代理')
 
 	assert 'PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}' in proxy_step
-	assert 'PROXY_TEST_URL: https://anyrouter.top/api/status' in proxy_step
-	assert 'PROXY_EXTRA_TEST_URL: https://anyrouter.top/login' in proxy_step
+	assert 'PROXY_TEST_URL: https://api.bxacc.xyz/api/status' in proxy_step
+	assert 'PROXY_EXTRA_TEST_URL: https://api.bxacc.xyz/login' in proxy_step
 	assert 'PROXY_EXTRA_TEST_MODE: login_page' in proxy_step
 	assert 'run: bash scripts/setup_checkin_proxy.sh' in proxy_step
 
